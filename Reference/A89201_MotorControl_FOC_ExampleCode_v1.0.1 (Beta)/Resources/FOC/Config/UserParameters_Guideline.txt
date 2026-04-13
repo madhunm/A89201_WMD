@@ -1,0 +1,1292 @@
+=================================================================================================================================
+                                                USER PARAMETER CALCULATION GUIDE
+=================================================================================================================================
+
+Document Title : User Parameter Calculation and Per-Unit Normalization (UserParamters_Calc_and_Norm)
+Version        : 1.0
+Date           : November 2025
+Author         : B.Shao 
+Copyright (c)    2025 Allegro MicroSystems, Inc. All Rights Reserved.
+
+ * The information contained in this file is confidential and proprietary.
+ * The information contained in this file is governed by Software License acknowledged during the download from Allegro’s Software
+ * Download Portal. You may obtain a copy of the Software License at https://www.allegromicro.com/en/about-allegro/legal.
+ * Unless required by applicable law or agreed to in writing, software distributed under the Software License is distributed on an 
+ * AS IS BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the Software License for the specific 
+ * language governing permissions and limitations under the License.
+ * You understand that the Software is subject to export control laws and regulations. YOU MAY NOT DOWNLOAD OR OTHERWISE EXPORT
+ * OR RE-EXPORT THE SOFTWARE OR ANY UNDERLYING INFORMATION OR TECHNOLOGY EXCEPT IN FULL COMPLIANCE WITH ALL UNITED STATES AND 
+ * OTHER APPLICABLE LAWS AND REGULATIONS.
+ * ---------------------------------------------------------------------------------------------------------------------------- 
+ * This Software License Agreement (“Agreement”) is made between Allegro MicroSystems, LLC (“Allegro”) and the user identified in                                                           
+ * the signature block below ("Licensee") (each a "Party" and collectively, the "Parties") on the date of the signature below.  
+ * LICENSE TERMS:
+ *    a. Exclusively in conjunction with Licensee’s development and sale of products containing the Application, Allegro grants 
+ * 		 Licensee a limited, non-exclusive, non-transferable, revocable, and royalty-free license under the copyright rights 
+ *       of Allegro or its licensor to (i) use the Software Deliverables to develop the Application, (ii) use the Application in 
+ * 		 conjunction with the Library Files, solely in a non-production environment for the exclusive purpose of evaluating the 
+ * 		 Application.   
+ * 
+ *   b. Licensee recognizes that the Software (i) has not been released by Allegro for general distribution or sale,
+ *      and that Allegro has not completed its testing and quality assurances, and (ii) is not qualified and has not 
+ *      been certified to meet any industry standards. Licensee shall not use the Software provided hereunder in 
+ *      any production environment. Licensee will not disclose or provide the Software or Application to any 
+ *      third party, and will defend, indemnify and hold Allegro harmless from all  damages, costs, liabilities 
+ *      and expenses related to any third party claims arising from Licensee's breach of this Agreement. 
+ *      Further, Licensee will not redistribute the Software or Application to any party, 
+ *      including individuals within Licensee’s organization.
+ *
+ *   c.  In no event will Licensee use the Software in conjunction with any devices (including competitor devices) 
+ *       other than the Allegro device identified in the Allegro documentation accompanying the Software or notified
+ *       to Licensee by Allegro in writing.
+ *
+ *   d. Licensee acknowledges that the Software and all related technical information, documents and materials
+ *      are subject to export controls under the U.S. Export Administration Regulations.  Licensee will (i) comply 
+ *      strictly with all legal requirements established under these controls, (ii) cooperate fully with Allegro in 
+ *      any official or unofficial audit or inspection that relates to these controls and (iii) not export, re-export,
+ *      divert or transfer, directly or indirectly, any such item or direct products thereof to Crimea, Iran, North Korea,
+ *      Sudan, Syria or any country that is embargoed by Executive order, unless Licensee has obtained the prior written 
+ *      authorization of Allegro and the U.S. Commerce Department.  
+ *
+ * CONFIDENTIAL TERMS:
+ *      a. Licensee acknowledges and agrees that all information regarding the Software, the results of testing and 
+ *         evaluation hereunder, the Feedback provided hereunder, the characteristics and performance of the Software 
+ *         and Application (including all related documentation) and this Agreement (collectively, the “Confidential Information”) 
+ *         are all confidential information and contain trade secrets of Allegro.  Licensee acknowledges that the Agreement will 
+ *         induce Allegro to make such Confidential Information available to Licensee.
+ *
+ *     This distribution is designated as EAR99.   
+---------------------------------------------------------------------------------------------------------------------------------
+1. INTRODUCTION
+---------------------------------------------------------------------------------------------------------------------------------
+This document aims to define the procedure for user parameter calculation and the corresponding per-unit (pu) normalization 
+process. It provides a standardized approach for deriving and documenting key motor control parameters to ensure consistency, 
+accuracy, and clarity across different projects.
+
+---------------------------------------------------------------------------------------------------------------------------------
+2. PURPOSE
+---------------------------------------------------------------------------------------------------------------------------------
+- To describe how user input parameters (e.g., voltage, current, speed, resistance, inductance) are calculated.
+- To establish a clear methodology for converting these parameters into per-unit (pu) values using predefined base quantities.
+- To provide reference guidelines that simplify parameter tuning and ensure portability between hardware platforms.
+
+---------------------------------------------------------------------------------------------------------------------------------
+3. SCOPE
+---------------------------------------------------------------------------------------------------------------------------------
+This document is intended for developers and system integrators working on Field-Oriented Control (FOC) and related motor control 
+applications. It covers:
+- Parameter definition and base value selection.
+- Conversion of physical units into normalized per-unit values.
+- Documentation rules for parameter calculation.
+
+---------------------------------------------------------------------------------------------------------------------------------
+4. PARAMETER CALCULATION DETAILS
+---------------------------------------------------------------------------------------------------------------------------------
+This section provides detailed procedures for calculating user parameters and converting them into per-unit (pu) values.
+
+---------------------------------------------------------------------------------------------------------------------------------
+4.A BASE VALUE CALCULATION
+---------------------------------------------------------------------------------------------------------------------------------
+All per-unit (pu) parameters in this document are derived from a set of consistent base values. Choosing proper base values 
+ensures that all quantities are normalized within [-1.0, +1.0] and remain dimensionless for fixed-point implementation (Q15/Q31).
+
+---------------------------------------------------------------------------------------------------------------------------------
+4.A.1 ELECTRICAL BASE VALUES
+---------------------------------------------------------------------------------------------------------------------------------
+- Voltage Base (Vbase): 	The reference voltage for normalization, typically chosen as the nominal DC bus voltage.
+     
+	Vbase = Vdc_nominal
+
+- Current Base (Ibase):		The reference current for normalization, typically chosen as the ADC maximum measured current.
+      
+	Ibase = Imax
+
+- Impedance Base (Zbase) Derived from Ohm’s law:
+     
+	Zbase = Vbase / Ibase
+
+- Power Base (Sbase) Reference apparent power:
+     
+	Sbase = Vbase × Ibase
+
+---------------------------------------------------------------------------------------------------------------------------------
+4.A.2 FREQUENCY AND TIME BASE VALUES
+---------------------------------------------------------------------------------------------------------------------------------
+
+- Electrical Base Frequency (f_base) Maximum electrical frequency to be represented in per-unit.
+  
+	Typically chosen as motor maximum electrical frequency or observer design frequency.
+	
+	f_base = chosen (Hz_elec)
+
+- Angular Frequency Base (omega_base) Derived from f_base:
+      
+	omega_base = 2pi × f_base
+	
+- Mechanical speed base (n_base): Related to electrical frequency by the number of pole pairs (p):
+  
+      n_base = f_base / p        (Hz_mech, mechanical revolutions per second)
+	  
+	  n_base_rpm = 60 × n_base = (60 / p) × f_base
+	  
+      omega_mech_base = omega_base / p   (rad/s_mech)
+	  
+- Time Base (Tbase) Inverse of angular base frequency:
+      
+	Tbase = 1 / omega_base
+
+- Sampling Period (Ts) Control system execution period, typically equal to PWM period:
+      
+	Ts = 1 / f_pwm
+
+- PWM Frequency (f_pwm) Switching frequency of inverter and control ISR.
+      
+	f_pwm = 1 / Ts
+
+---------------------------------------------------------------------------------------------------------------------------------
+4.A.3 REACTANCE AND INDUCTANCE BASE VALUES
+---------------------------------------------------------------------------------------------------------------------------------
+- Inductance Base (Lbase) Defined from base impedance and angular frequency:
+      
+	Lbase = Zbase / omega_base
+
+- Reactance Base (Xbase) Equivalent form:
+     
+	Xbase = omega_base × Lbase = Zbase
+
+---------------------------------------------------------------------------------------------------------------------------------
+4.A.4 FLUX LINKAGE BASE VALUES
+---------------------------------------------------------------------------------------------------------------------------------
+- Flux Base (Psi_base) Derived from voltage and angular speed base:
+      
+	Psi_base = Vbase / omega_base
+
+Notes:
+- For salient machines, compute d-axis and q-axis values separately (Ld, Lq).
+- These bases are used for normalizing Rs, L, flux, current, and voltage in observer and controller design.
+
+---------------------------------------------------------------------------------------------------------------------------------
+4.A.5 SUMMARY OF BASE RELATIONSHIPS
+---------------------------------------------------------------------------------------------------------------------------------
+   
+    Vbase   = chosen (e.g. DC bus nominal)
+    Ibase   = chosen (e.g. ADC max measured current)
+    Zbase   = Vbase / Ibase
+    f_base  = chosen (max electrical frequency)
+    omega_base   = 2pi × f_base
+    Tbase   = 1 / omega_base
+    Lbase   = Zbase / omega_base
+    Psi_base   = Vbase / omega_base
+    Ts      = 1 / f_pwm
+
+---------------------------------------------------------------------------------------------------------------------------------
+4.A.6 NUMERICAL EXAMPLE
+---------------------------------------------------------------------------------------------------------------------------------
+Based on A89201
+
+- Vbase 	= 	12 V
+- Ibase 	= 	40 A (Shunt resistor: 2mohm, differential amp gain: 15)
+- f_base 	= 	1000 Hz
+- f_pwm  	= 	20 kHz
+
+Compute:
+- Zbase = 12 / 40 = 0.3 Ohm
+- omega_base = 2pi × 1000 = 6283 rad/s
+- Tbase = 1 / 6283 = 0.000159 s
+- Lbase = 0.3 / 6283 = 0.0000477 H
+- Psi_base = 12 / 6283 = 0.00191 Wb
+- Ts = 1 / 20000 = 50 µs
+
+These base values are then used for all subsequent per-unit normalization and controller parameter calculations.
+
+
+
+---------------------------------------------------------------------------------------------------------------------------------
+4.0 DIFFERITIAL AMPLIFIER GAIN
+---------------------------------------------------------------------------------------------------------------------------------
+SDG is a 3-bit field that selects the differential amplifier gain. Valid gains and their bit codes are listed below. The field 
+resets to 010 (gain = 10), unless otherwise stated by the device datasheet (GDU User Manual).
+
+- Gain Table
+
+		Bits  | Decimal | Gain
+		------+---------+-----
+		000   |   0     | 5
+		001   |   1     | 8
+		010   |   2     | 10  (Default)
+		011   |   3     | 13
+		100   |   4     | 15
+		101   |   5     | 18
+		110   |   6     | 20
+		111   |   7     | 25
+
+
+- Decide the target gain you need: {5, 8, 10, 13, 15, 18, 20, 25}.
+- Look up the corresponding 3-bit code (or its decimal code 0–7) from the table.
+- Write that 3-bit value into SDG[2:0] of the register
+
+---------------------------------------------------------------------------------------------------------------------------------
+4.1 PWM PERIOD
+---------------------------------------------------------------------------------------------------------------------------------
+The PWM period defines the switching cycle length used by the motor control system. It is calculated as:
+
+    PWM_Period = (PWM_Timer_Clock_Frequency) / (Desired_PWM_Frequency)
+
+Where:
+- Timer_Clock_Frequency = base frequency of the PWM timer (80 MHz for both A89201 and A89224)
+- Desired_PWM_Frequency = user-defined PWM switching frequency
+
+Example:
+- Timer_Clock_Frequency = 80 MHz
+- Desired_PWM_Frequency = 20 kHz
+- Calculation: PWM_Period = 80,000,000 / 20,000 = 4000
+
+Therefore, the user should enter **4000** as the PWM period value.
+
+---------------------------------------------------------------------------------------------------------------------------------
+4.2 DEADTIME
+---------------------------------------------------------------------------------------------------------------------------------
+Deadtime ensures that complementary MOSFETs in the same phase leg are never ON at the same time. The value is calculated as:
+
+    Deadtime = (Desired_Deadtime_Seconds) × (Timer_Clock_Frequency)
+
+Where:
+- Desired_Deadtime_Seconds = expected deadtime in seconds (e.g. 500 ns)
+- Timer_Clock_Frequency = base frequency of the PWM timer (80 MHz for both A89201 and A89224)
+
+Example:
+- Desired_Deadtime_Seconds = 500 ns = 500 × 10^-9 s
+- Timer_Clock_Frequency = 80 MHz
+- Calculation: Deadtime = 500e-9 × 80e6 = 40
+
+Therefore, the user should enter **40** as the deadtime value.
+
+---------------------------------------------------------------------------------------------------------------------------------
+4.3 RUN COMMAND
+---------------------------------------------------------------------------------------------------------------------------------
+The run command starts or stops the motor control algorithm.
+
+    Run = 0 -> STOP (motor control disabled)
+    Run = 1 -> RUN  (motor control enabled)
+
+Example:
+- Run = 0 -> System remains idle, PWM outputs disabled.
+- Run = 1 -> Motor control starts according to the configured state machine.
+
+Notes:
+- Always ensure parameters are initialized before setting Run = 1.
+
+---------------------------------------------------------------------------------------------------------------------------------
+4.4 ROTATION DIRECTION
+---------------------------------------------------------------------------------------------------------------------------------
+The direction flag defines the desired motor rotation.
+
+    Dir = 0 -> Forward (FWD)
+    Dir = 1 -> Reverse (REV)
+
+Example:
+- Dir = 0 -> Motor rotates clockwise.
+- Dir = 1 -> Motor rotates counter-clockwise.
+
+---------------------------------------------------------------------------------------------------------------------------------
+4.5 IDLE BLANK DURATION
+---------------------------------------------------------------------------------------------------------------------------------
+The idle blanking duration is a wait time (in PWM ticks) before current reconstruction or observer activation. **One tick** 
+equals **one PWM period**. The value is calculated as:
+
+    Idle_Blank_Ticks = (Desired_Blank_Time_Seconds) / (PWM_Period)
+
+Where:
+- Desired_Blank_Time_Seconds = required blanking time in seconds
+- PWM_Period = 1 / switching frequency of the PWM (e.g. 20 kHz)
+
+Examples:
+- PWM_Period = 1 /20 kHz -> PWM period = 50 µs
+- Desired_Blank_Time = 500 µs  -> Idle_Blank_Ticks = 500e-6 × 20e3 = 10
+
+---------------------------------------------------------------------------------------------------------------------------------
+4.6 ALIGN ELECTRICAL ANGLE
+---------------------------------------------------------------------------------------------------------------------------------
+The alignment angle defines the fixed d-axis angle used during the alignment phase. It is expressed in Q15 format within [-1, 1] 
+representing [-pi, pi].
+
+    theta_align_Q15 = (theta_align_actual / pi)
+
+Where:
+- theta_align_actual = desired alignment electrical angle in radians
+
+Example:
+- theta_align_actual = 90° = pi/2 rad
+- theta_align_Q15 = (pi/2) / pi = 0.5 -> Q15 = 0.5 × 32768 = 16384
+
+Therefore, the user should enter **16384** as the alignment angle.
+
+---------------------------------------------------------------------------------------------------------------------------------
+4.7 ALIGN D-AXIS CURRENT
+---------------------------------------------------------------------------------------------------------------------------------
+The alignment current defines the d-axis current reference used to magnetically align the rotor before ramp-up. It is expressed 
+in per-unit (Q15 format) relative to the current base (Ibase).
+
+    Id_align_pu = I_align_actual / Ibase
+
+Where:
+- I_align_actual = desired alignment current in Amps
+- Ibase = current base value
+
+Example:
+- I_align_actual = 2 A
+- Ibase = 10 A
+- Calculation: Id_align_pu = 2 / 10 = 0.2 -> Q15 = 0.2 × 32768 ˜ 6554 -> **6554** as MotorControl_SetAlignAngle_Q15() input
+
+---------------------------------------------------------------------------------------------------------------------------------
+4.8 ALIGN DURATION
+---------------------------------------------------------------------------------------------------------------------------------
+The alignment duration defines how long the rotor is held in the alignment position. It is expressed in ticks, where one tick 
+= one PWM period.
+
+    Align_Duration_Ticks = Desired_Align_Time / (PWM_Period) = Desired_Align_Time × PWM_Frequency
+
+Example:
+- Desired_Align_Time = 1 s
+- PWM_Frequency = 20 kHz
+- Calculation: Align_Duration_Ticks = 1 × 20,000 = 20000
+
+Therefore, the user should enter **20000** ticks.
+
+---------------------------------------------------------------------------------------------------------------------------------
+4.9 RAMP-UP TARGET IQ
+---------------------------------------------------------------------------------------------------------------------------------
+The ramp-up current defines the maximum q-axis current magnitude during the open-loop acceleration phase. It is expressed in Q15 
+format relative to Ibase.
+
+    Iq_ramp_pu = Iq_ramp_actual / Ibase
+
+Example:
+- Iq_ramp_actual = 3 A
+- Ibase = 10 A
+- Calculation: Iq_ramp_pu = 3 / 10 = 0.3 -> Q15 = 0.3 × 32768 ˜ 9830
+
+Therefore, the user should enter **9830** as the ramp-up current.
+
+---------------------------------------------------------------------------------------------------------------------------------
+4.10 RAMP-UP TARGET OMEGA
+---------------------------------------------------------------------------------------------------------------------------------
+The ramp-up target omega defines the open-loop electrical speed to reach at the end of the ramp-up phase. It is expressed in per-
+unit (Q15 format) relative to the base angular frequency (omega_base).
+
+    omega_ramp_target_pu = omega_ramp_target_actual / omega_base
+
+Where:
+- omega_ramp_actual = target electrical angular speed (rad/s)
+- omega_base = base angular speed (rad/s), typically 2pi × fbase
+
+Example:
+- omega_ramp_target_actual = 125.66 rad/s
+- omega_base = 6283 rad/s (corresponding to 1000 Hz base frequency)
+- Calculation: omega_ramp_pu = 125.66 / 6283 ˜ 0.02 -> Q15 = 0.02 × 32768 ˜ 655
+
+Therefore, the user should enter **10428** as the ramp-up target omega.
+
+---------------------------------------------------------------------------------------------------------------------------------
+4.11 RAMP-UP DURATION
+---------------------------------------------------------------------------------------------------------------------------------
+The ramp-up duration defines the time length for open-loop speed acceleration, measured in ticks.
+
+     Ramp_Duration_Ticks = Desired_Ramp_Time / (PWM_Period) = Desired_Ramp_Time × PWM_Frequency
+
+
+Example:
+- Desired_Ramp_Time = 2 s
+- PWM_Frequency = 20 kHz
+- Ramp_Duration_Ticks = 2 × 20,000 = 40,000
+
+Therefore, the user should enter **40000** ticks.
+
+Notes:
+- Too short duration risks losing synchronism.
+
+---------------------------------------------------------------------------------------------------------------------------------
+4.12 RAMP-UP OMEGA STEP
+---------------------------------------------------------------------------------------------------------------------------------
+The ramp-up omega step defines the incremental change of open-loop electrical speed applied every PWM tick during ramp-up. It is 
+expressed in Q31 format for fine resolution.
+
+    omega_step_pu = (omega_target_pu - omega_start_pu) / Ramp_Duration_Ticks
+
+Where:
+- omega_target_pu = target open-loop speed (per-unit, Q15)
+- omega_start_pu  = starting speed (often 0)
+- Ramp_Duration_Ticks = duration of ramp-up (in ticks)
+
+Example:
+- omega_target_pu = 0.02 (Q15 ˜ 655)
+- omega_start_pu  = 0
+- Ramp_Duration_Ticks = 40000
+- omega_step_pu = 0.02 / 40000 ˜ 0.0000005
+- Q31 = 0.0000005 × 2^31 ˜ 34
+
+Notes:
+- Smaller steps = smoother acceleration.
+- Too small step = very long ramp-up time.
+
+Therefore, the user should enter **34** as the ramp-up omega step.
+
+---------------------------------------------------------------------------------------------------------------------------------
+4.13 OMEGA TO THETA GAIN
+---------------------------------------------------------------------------------------------------------------------------------
+This parameter converts per-unit angular speed (omega_pu) into per-unit angle increment per PWM tick (theta_pu/tick) as	
+delta_theta_pu = omega_pu × K_omega2theta_pu. It is expressed in Q15.
+
+	K_omega2theta_pu = ( omega_base / f_pwm ) /  pi  = 2·f_base / f_pwm
+
+Example:
+- f_base = 1000 Hz, f_pwm = 20 kHz -> K_omega2theta_pu = 2*1000/20000 = 0.1 
+- Q15 = 0.1 × 2^15 ˜ 3277
+
+Notes:
+- This definition is for per-unit -> (1 pu = p rad). 
+
+Therefore, the user should enter **6710886** as omega to theta gain.
+
+---------------------------------------------------------------------------------------------------------------------------------
+4.14 SWITCHING MINIMUM IQ
+---------------------------------------------------------------------------------------------------------------------------------
+The minimum q-axis current required before switching to closed-loop control. It is expressed in per-unit (Q15).
+
+    Iq_switch_min_pu = Iq_switch_min_actual / Ibase
+
+Example:
+- Iq_switch_min_actual = 0.5 A
+- Ibase = 10 A
+- Iq_switch_min_pu = 0.5 / 10 = 0.05 -> Q15 ˜ 1638
+
+Therefore, the user should enter **1638** as minimum q-axis current.
+
+Notes:
+- Prevents premature observer takeover.
+- Typical range: 5%–10% of rated current.
+
+---------------------------------------------------------------------------------------------------------------------------------
+4.15 SWITCHING IQ STEP
+---------------------------------------------------------------------------------------------------------------------------------
+The incremental change of Iq reference per tick during switching. It is expressed in Q31 format for fine resolution.
+
+    delta_Iq_step_pu = (Iq_ramp_pu - Iq_switch_min_pu) / Obs_Hold_Ticks
+
+Example:
+- Iq_ramp_pu = 0.3
+- Iq_switch_min_pu = 0.05
+- Obs_Hold_Ticks = 5000
+- delta_Iq_step = (0.3 – 0.05) / 5000 = 5e-5
+- Q31 = 5e-5 × 2^31 ˜ 107374
+
+Therefore, the user should enter **107374** as switching iq step.
+
+Notes:
+- Smaller step ensures smooth Iq transition.
+- Avoids torque shock during mode switch.
+
+---------------------------------------------------------------------------------------------------------------------------------
+4.16 SWITCHING ANGLE ERROR THRESHOLD
+---------------------------------------------------------------------------------------------------------------------------------
+The maximum tolerable angle error between open-loop and observer before switching. Expressed in per-unit (Q15).
+
+    theta_error_threshold_pu = theta_error_actual / pi
+
+Example:
+- theta_error_actual = 10° = 0.174 rad
+- theta_error_threshold_pu = 0.174 / pi ˜ 0.055 -> Q15 ˜ 1792
+
+Therefore, the user should enter **1792** as switching angle error thershold value.
+
+Notes:
+- Smaller threshold = tighter synchronization but may delay switch.
+- Typical values: 5°–15° electrical.
+
+---------------------------------------------------------------------------------------------------------------------------------
+4.17 OBSERVER READY HOLD TICKS
+---------------------------------------------------------------------------------------------------------------------------------
+This parameter defines how long (in PWM **ticks**) the estimated electrical angle error must remain within the acceptable range 
+before the observer (e.g., SMO or PLL) is considered *ready* for closed-loop operation.
+
+In each PWM cycle, the controller checks:
+
+    if ( |theta_error| <= thetaErrTh_q15 )
+        ObserveHoldCounter++
+    else
+        ObserveHoldCounter = 0
+
+When the counter exceeds the configured **ObsReadyTicks**, the observer is treated as stable and the control logic proceeds 
+to the next switch phase (e.g., `SWITCH_WAIT_SPEED`).
+
+Example:
+- Desired stable duration = 5 ms = 0.005 s
+- PWM frequency = 20 kHz
+- ObsReadyTicks = 0.005 × 20,000 = 100 ticks
+
+Therefore, the user should enter **100** as the value of *ObsReadyTicks*.
+
+Notes:
+- Ensures the observer (SMO/PLL) maintains a stable theta/omega estimation for the specified number of consecutive ticks.
+- Increasing ObsReadyTicks improves reliability but delays the transition.
+- Typical range: 50–500 ticks depending on system noise and observer dynamics.
+
+---------------------------------------------------------------------------------------------------------------------------------
+4.18 OBSERVER ERROR TIMEOUT 
+---------------------------------------------------------------------------------------------------------------------------------
+This parameter defines the *maximum allowed duration* (in PWM ticks) for the observer-ready phase before timing out.
+
+If the observer angle error never stays within the threshold for the required hold time (4.17) and the internal timeout 
+counter exceeds **ErrTimeoutTicks**, the controller automatically exits the current switch phase to prevent stalling:
+
+    if ( ObserveHoldCounter > ObsReadyTicks ||
+         ++ErrTimeoutCounter > ErrTimeoutTicks )
+         --> proceed to next phase
+
+The timeout provides a safety mechanism ensuring the state machine will not remain indefinitely in the 
+observer-ready phase due to persistent estimation errors.
+
+    ErrTimeoutTicks = Max_Allowed_Time × PWM_Frequency
+
+Example:
+- Max_Allowed_Time = 0.5 s
+- PWM_Frequency = 20 kHz
+- ErrTimeoutTicks = 0.5 × 20,000 = 10,000 ticks
+
+Therefore, the user should set **ErrTimeoutTicks = 10,000**.
+
+Notes:
+- A smaller value causes faster fallback if the observer fails to converge.
+- A larger value allows more time for slow observers to stabilize.
+- Typical range: 5,000–20,000 ticks.
+
+---------------------------------------------------------------------------------------------------------------------------------
+4.19 SPEED-LOOP READY HOLD COUNT
+---------------------------------------------------------------------------------------------------------------------------------
+Defines the hold duration before enabling the speed loop after current/observer loop stabilization. Measured in ticks.
+
+    SpdLp_Hold_Ticks = Desired_Hold_Time × PWM_Frequency
+
+Example:
+- Desired_Hold_Time = 500 ms = 0.5 s
+- PWM_Frequency = 20 kHz
+- SpdLp_Hold_Ticks = 0.5 × 20,000 = 10,000
+
+Therefore, the user should enter **10000** as ticks.
+
+---------------------------------------------------------------------------------------------------------------------------------
+4.20 CURRENT LIMIT
+---------------------------------------------------------------------------------------------------------------------------------
+The current limit defines the maximum per-phase current magnitude allowed by the control system. It is expressed in per-unit (Q15).
+
+    I_limit_pu = I_limit_actual / Ibase
+
+Example:
+- I_limit_actual = 8 A
+- Ibase = 10 A
+- I_limit_pu = 8 / 10 = 0.8 -> Q15 ˜ 26214
+
+Therefore, the user should enter **26214** as current limit.
+
+Notes:
+- Prevents controller from demanding excessive torque.
+- Typical values: 0.8–1.0 pu (80–100% rated current).
+
+---------------------------------------------------------------------------------------------------------------------------------
+4.21 OVER-CURRENT DEBOUNCE
+---------------------------------------------------------------------------------------------------------------------------------
+Defines the number of PWM ticks that an over-current condition must persist before being considered valid. This prevents false 
+trips caused by noise or spikes.
+
+    OvrCurr_Debounce_Ticks = Desired_Debounce_Time × PWM_Frequency
+
+Example:
+- Desired_Debounce_Time = 50 µs
+- PWM_Frequency = 20 kHz
+- OvrCurr_Debounce_Ticks = 50e-6 × 20e3 = 1
+
+Therefore, the user should enter **1** as ticks.
+
+Notes:
+- Typical values: 1–5 ticks.
+- Must be long enough to filter glitches, but short enough to protect hardware.
+
+---------------------------------------------------------------------------------------------------------------------------------
+4.22 VDQ MAX LIMIT
+---------------------------------------------------------------------------------------------------------------------------------
+Defines the maximum allowed magnitude of the combined voltage vector (Vd, Vq). It is expressed in per-unit (Q15).
+
+    Vdq_limit_pu = Vdq_limit_actual / Vbase
+
+Example:
+- Vdq_limit_actual = 12 / sqrt(3) ~ 6.928V  (SVPWM)
+- Vbase = 12 V
+- Vdq_limit_pu = 1 / sqrt(3) ˜ 0.577 -> Q15 ˜ 18907
+
+Therefore, the user should enter **18907** as the Vdq limit.
+
+Notes:
+- Ensures modulation stays within inverter linear region.
+
+---------------------------------------------------------------------------------------------------------------------------------
+4.23 ADC TO CURRENT PER-UNIT GAIN
+---------------------------------------------------------------------------------------------------------------------------------
+This coefficient converts raw ADC counts into per-unit (pu) current relative to the current base Ibase. It accounts for shunt 
+value, amplifier gain, and ADC resolution.
+
+    K_adc2Ipu = ( Vref / ADC_Fullscale ) / ( R_shunt × G_amp × Ibase )
+
+Example:
+- ADC: 11-bit, Vref = 1.2 V -> V_LSB = 1.2 / 2048 = 0.0005859375 V/count
+- Shunt resistor R_shunt = 2 mOhm
+- Amplifier gain G_amp = 10
+- Ibase = 40 A
+- K_adc2Ipu = 0.0005859375 / (0.002 × 10 × 40) = 0.000732421875 pu/count
+- Q15 = 0.000732421875 × 32768 ˜ 24
+
+Therefore, the user should enter **24** as the adc to current per unit gain.
+
+Notes:
+- Always subtract ADC_offset first.
+- Clamp I_pu in [-1.0, +1.0].
+- This coefficient is hardware dependent.
+
+---------------------------------------------------------------------------------------------------------------------------------
+4.24 VBB (microV) TO DAU ADC COUNTS GAIN
+---------------------------------------------------------------------------------------------------------------------------------
+The DAU measures the DC bus via a resistor divider and an ADC with 2.4 V reference.The divider ratio is:
+    
+	k_div = V_ADCin / VBB = 0.0476   (i.e., 4.76% of VBB goes to the ADC in A89201 datasheet)
+
+The DAU ADC transfer function is:
+    
+	counts = V_ADCin × (2048 / 1.2 V)
+
+Step 1: Solve for V_ADCin
+    
+	V_ADCin = counts × (1.2 V / 2048)
+
+Step 2: Solve for VBB
+    
+	VBB = V_ADCin / k_div = counts × (1.2 V / 2048) / 0.0476
+
+Step 3: Convert to microvolts
+
+    1.2 V = 1.2 × 10^6 µV
+
+    VBB[µV] = counts × (1.2e6 / (2048 × 0.0476))
+
+Numerical gain:
+
+    Gain = 1.2e6 / (2048 × 0.0476) ˜ 12,310 µV per count
+
+Final formula:
+
+    VBB[µV] ˜ counts × 12,310
+
+Inverse conversion (useful for forward scaling):
+
+    counts ˜ VBB[µV] / 12,310
+
+Example:
+- counts = 976
+- VBB ˜ 976 × 12,310 ˜ 12,010,000 µV (˜ 12,010 mV)
+
+Notes:
+- All computations use microvolts for maximum resolution.
+- For display or user interface, conversion to millivolts may be more convenient: VBB[mV] = VBB[µV] / 1000
+
+---------------------------------------------------------------------------------------------------------------------------------
+4.25 ADC TO VOLTAGE PER-UNIT GAIN
+---------------------------------------------------------------------------------------------------------------------------------
+This coefficient converts raw ADC counts into per-unit (pu) DC bus voltage relative to the chosen voltage base Vbase.  It accounts 
+for both the ADC transfer function and the external resistor divider ratio.
+
+Step 1: ADC transfer function
+   
+   V_ADC_in = counts × (Vref / ADC_Fullscale)	= counts × (1.2 V / 2048)
+
+Step 2: Undo the divider ratio
+    
+	VBB = V_ADC_in / k_div = counts × (1.2 / 2048) / 0.0476
+
+Step 3: Normalize by Vbase
+    
+	Vpu = VBB / Vbase = counts × (1.2 / (2048 × 0.0476 × Vbase))
+
+Convert numerator to µV for precision:
+    
+	Vref = 1.2 V = 1.2e6 µV
+
+Final formula:
+
+    K_adc2Vpu = (1.2e6 / (2048 × 0.0476 × Vbase[mV]))   pu/count
+
+Example:
+- Vbase = 12 V = 12000 mV
+- K_adc2Vpu = 1.2e6 / (2048 × 0.0476 × 12000) ˜ 0.00103 pu/count
+- Q15 = 0.00103 × 32768 ˜ 34
+
+Notes:
+- Divider ratio k_div = 0.0476 (4.76%) must match hardware design.
+- Vbase is typically set to the nominal bus voltage (e.g., 12 V, 24 V).
+- Always clamp pu values within [0, 1] before use.
+
+---------------------------------------------------------------------------------------------------------------------------------
+4.26 SPEED COMMAND
+---------------------------------------------------------------------------------------------------------------------------------
+Defines the external speed command reference. It is expressed in per-unit (Q15) relative to speed base.
+
+    Speed_cmd_pu = Speed_cmd_actual / Speed_base
+
+Example:
+- Speed_cmd_actual = 1500 rpm
+- Speed_base = n_base_rpm = 3000 rpm
+- Speed_cmd_pu = 1500 / 3000 = 0.5 -> Q15 = 16384
+
+Therefore, the user should enter **16384** as the speed command.
+
+Notes:
+- Typical range: -1.0 to +1.0 pu (direction depending on Dir flag).
+
+---------------------------------------------------------------------------------------------------------------------------------
+4.27 OMEGA (SMO Q15) -> MECHANICAL SPEED RELATIVE TO n_base_rpm (AND RPM)
+---------------------------------------------------------------------------------------------------------------------------------
+Assumptions:
+- omega_smo_Q15 is the SMO electrical angular speed in per-unit (Q15), i.e., omega_smo = omega_e / omega_base.
+- Mechanical speed bases:
+
+    n_base      = f_base / p
+    n_base_rpm  = 60 × n_base = (60/p) × f_base = (60/(2pi * p)) × omega_base
+
+    n_pu = n_actual_rpm / n_base_rpm
+But:
+    n_pu = ( (60/(2pi * p)) · omega_e ) / ( (60/(2pi * p)) · omega_base ) = omega_e / omega_base = omega_smo
+	
+Therefore:
+
+    n_pu_Q15  = omega_smo_Q15       (identity; no extra coefficient)
+	Gain  = 1 -> Q15 = 32,767
+
+Example:
+- f_base = 1000 Hz, p = 2 -> n_base_rpm = 60 × (1000/2) = 30,000 rpm
+- omega_smo = 0.25 pu -> omega_smo_Q15 ˜ 0.25 × 32768 = 8192
+- n_rpm = (8192 × 30000) >> 15 ˜ 7500 rpm
+
+---------------------------------------------------------------------------------------------------------------------------------
+4.28 ID / IQ CURRENT-LOOP PI GAINS (BANDWIDTH-BASED)
+---------------------------------------------------------------------------------------------------------------------------------
+Plant (per axis, Rs–L model, without cross-coupling):
+    
+	di/dt = (v - Rs·i - e) / L
+	
+Per-unit normalization with bases (see 4.A):
+    
+	r_pu = Rs / Zbase
+    l_pu = L  / Lbase
+	
+Sampling period:
+
+    Ts = 1 / f_pwm
+
+Target closed-loop bandwidth for current loop:
+
+    omegac_i  (rad/s)   with   omegac_i <= (0.05 ~ 0.15) × 2pi × f_pwm
+
+Continuous-time tuning (classical choice):
+    
+	Kp_actual = L · omegac_i
+    Ki_actual = Rs · omegac_i
+
+Per-unit discrete implementation (direct, compact form):
+    
+	Kp_pu = l_pu · ( omegac_i / omega_base )
+    Ki_pu = r_pu · ( omegac_i · Ts )
+
+Where:
+- omega_base = 2pi × f_base  (electrical base frequency)
+- l_pu = L / Lbase,  r_pu = Rs / Zbase
+- Kp_pu, Ki_pu are dimensionless per-unit coefficients used in:
+      V_pu = Kp_pu · e_i_pu + (Ki_pu) · Sum( e_i_pu )
+
+FIXED-POINT IMPLEMENTATION (AUTO Q-FORMAT ADJUSTMENT)
+
+By default, both Kp and Ki are represented in Q15 format (1.0 = 32767).
+
+If either gain exceeds 1.0, the number of fractional bits is reduced to prevent overflow while keeping the int16 data type unchanged.
+
+Automatic adjustment rule:
+
+| Condition            | Q-format | Dynamic range |
+|----------------------|-----------|----------------|
+| |K| = 1.0            | Q15       | ±1.0           |
+| 1.0 < |K| = 2.0      | Q14       | ±2.0           |
+| 2.0 < |K| = 4.0      | Q13       | ±4.0           |
+| 4.0 < |K| = 8.0      | Q12       | ±8.0           |
+| 8.0 < |K| = 16.0     | Q11       | ±16.0          |
+
+This ensures the PI controller coefficients remain within range without changing data type or scaling elsewhere in the control loop.
+
+From 4.A:
+    l_pu = 1.309,  r_pu = 0.125,  omega_base = 6283 rad/s
+    f_pwm = 20 kHz -> Ts = 50 µs
+    f_c,i = 500 Hz -> omegac_i = 3141 rad/s
+
+Compute:
+    Kp_pu = 1.309 × (3141 / 6283) = 0.655
+    Ki_pu = 0.125 × (3141 × 50e-6) = 0.0196
+
+-> Both = 1.0 ->use Q15
+    Kp_Q15 = 0.655 × 32768 = 21464
+    Ki_Q15 = 0.0196 × 32768 = 641
+
+If Kp_pu = 2.5 and Ki_pu = 1.3 -> max(|K|) = 2.5 -> use Q13
+    scale = 2^13 = 8192
+    Kp_Q13 = 2.5 × 8192 = 20480
+    Ki_Q13 = 1.3 × 8192 = 10649
+
+This keeps both coefficients within ±32767 in int16 format.
+
+---------------------------------------------------------------------------------------------------------------------------------
+4.29 PI OUTPUT LIMITS (Id/Iq)
+---------------------------------------------------------------------------------------------------------------------------------
+Defines the saturation limits of Id/Iq PI output in per-unit (pu)relative to voltage base Vbase.
+
+    V_limit_pu = V_limit_actual / Vbase
+
+Example:
+- V_limit_actual = 12/sqrt(3) V ~ 6.928 V
+- Vbase = 12 V
+- V_limit_pu = 1/sqrt(3) = 0.577 -> Q15 ˜ 18919
+
+Notes:
+- Typically set equal for both Id and Iq controllers.
+- Required to prevent integrator windup.
+
+---------------------------------------------------------------------------------------------------------------------------------
+4.30 SPEED PI GAINS
+---------------------------------------------------------------------------------------------------------------------------------
+The speed loop is designed in the mechanical speed domain (RPM). Therefore, normalization is performed with respect to 
+the mechanical speed base ( n_base_rpm).
+
+- Mechanical speed base:
+  
+	  p = pole pairs
+      n_base      = f_base / p         (Hz_mech)
+      n_base_rpm  = 60 × n_base        (RPM)
+      omega_mech_base = omega_base / p         (rad/s_mech)
+
+- Per-unit speed reference and feedback:
+
+      Spd_ref_pu = Spd_ref_rpm / n_base_rpm
+      Spd_fb_pu  = Spd_meas_rpm / n_base_rpm
+
+- PI design based on bandwidth:
+  The speed loop bandwidth omegac_speed is chosen relative to the current loop bandwidth omegac_current:
+  
+      omegac_speed ˜ (1/10 … 1/20) × omegac_current
+
+- PI gains (normalized form):
+  
+      Kp_spd = 2 × zata × omegac_speed × J
+      Ki_spd = omegac_speed² × Jactual × Ts  
+
+  where:
+    zata    		= damping factor (typically ˜ 0.707)
+    Torque_base 	= (3/2) × p × Psi_base × Ibase = (3/2) × p × Vbase × Ibase / omega_base 
+	J 			 	= J_actual / (Torque_base / omega_mech_base) 
+	omegac_speed 	= speed loop bandwidth
+	Ts 				= 1 / f_pwm 
+
+
+FIXED-POINT IMPLEMENTATION (AUTO Q-FORMAT ADJUSTMENT)
+
+By default, both Kp and Ki for the speed loop are represented in Q15 format (1.0 = 32767).
+
+If either gain exceeds 1.0, the number of fractional bits is reduced to prevent overflow while keeping the int16 data type 
+unchanged.
+
+Automatic adjustment rule:
+
+| Condition            | Q-format | Dynamic range |
+|----------------------|-----------|----------------|
+| |K| = 1.0            | Q15       | ±1.0           |
+| 1.0 < |K| = 2.0      | Q14       | ±2.0           |
+| 2.0 < |K| = 4.0      | Q13       | ±4.0           |
+| 4.0 < |K| = 8.0      | Q12       | ±8.0           |
+| 8.0 < |K| = 16.0     | Q11       | ±16.0          |
+
+This ensures that both proportional and integral speed-loop gains remain within the int16 range without changing data type or 
+scaling elsewhere.
+
+EXAMPLE
+
+Given:
+    J_pu = 0.85
+    Kt_pu = 1.0
+    omega_base = 6283 rad/s
+    f_ctrl = 2 kHz -> Ts = 500 µs
+    f_c,spd = 50 Hz -> omegac_spd = 314 rad/s
+
+Compute:
+    Kp_pu = 0.85 × (314 / 6283) / 1.0 = 0.0425
+    Ki_pu = 0.0425 × (314 × 500e-6) / 5 = 0.00133
+
+-> Both = 1.0 -> use Q15
+    Kp_Q15 = 0.0425 × 32768 = 1394
+    Ki_Q15 = 0.00133 × 32768 = 44
+
+If for another design Kp_pu = 3.2 and Ki_pu = 1.8 -> max(|K|) = 3.2 -> use Q13
+    scale = 2^13 = 8192
+    Kp_Q13 = 3.2 × 8192 = 26214
+    Ki_Q13 = 1.8 × 8192 = 14746
+
+This keeps both coefficients within ±32767 in int16 format.
+
+---------------------------------------------------------------------------------------------------------------------------------
+4.31 SPEED PI OUTPUT LIMITS
+---------------------------------------------------------------------------------------------------------------------------------
+Defines torque current reference (Iq_ref) saturation from speed PI,in per-unit (pu) relative to current base.
+
+    Iq_limit_max_pu = Iq_limit_max_actual / Ibase
+	Iq_limit_min_pu = Iq_limit_min_actual / Ibase
+
+Example:
+- Iq_limit_max_actual = 5 A
+- Iq_limit_min_actual = -5 A
+- Ibase = 10 A
+- Iq_limit_max_pu = 0.5  -> Q15 = 16384
+- Iq_limit_min_pu = -0.5 -> Q15 = -16384
+
+Notes:
+- Prevents speed loop from demanding more current than allowed.
+- Usually matches current loop limit.
+
+---------------------------------------------------------------------------------------------------------------------------------
+4.32 SPEED RAMP PARAMETERS (BASED ON n_base_rpm, SPEED-LOOP TIMER)
+---------------------------------------------------------------------------------------------------------------------------------
+Defines the acceleration and deceleration slopes of the speed reference in per-unit (Q15) **per speed-loop tick**.This ramp is 
+referenced to the mechanical speed base n_base_rpm and is independent of PWM frequency.
+
+Per-unit definitions:
+
+    n_ref_pu    = n_ref_rpm / n_base_rpm
+    a_pu_per_s  = (Acceleration_target_rpm_per_s) / n_base_rpm
+	da_pu_per_s = (Deacceleration_target_rpm_per_s) / n_base_rpm
+
+Speed-loop timer:
+
+    Ts_spd  = speed-loop period (e.g., 1 ms)
+    f_spd   = 1 / Ts_spd (e.g., 1000 Hz)
+
+Per-tick increment (used in the ramp generator):
+
+    delta_n_ref_pu_per_tick = a_pu_per_s × Ts_spd  = (Acceleration_target_rpm_per_s / n_base_rpm) × Ts_spd 
+						or 	= da_pu_per_s × Ts_spd = (Deacceleration_target_rpm_per_s / n_base_rpm) × Ts_spd
+
+Q31 form:
+    step_Q31 = round( delta_n_ref_pu_per_tick × 2147483648 )
+
+Ramp update (per tick):
+
+    n_ref_pu[k+1] = sat( n_ref_pu[k] ± delta_n_ref_pu_per_tick )
+    // use '+' for acceleration, '-' for deceleration; apply output limits as needed
+
+Example:
+- n_base_rpm = 3000 rpm
+- Acceleration_target = 150 rpm/s
+- Ts_spd = 1 ms = 0.001 s
+Compute:
+- a_pu_per_s = 150 / 3000 = 0.05 pu/s
+- delta_n_ref_pu_per_tick = 0.05 × 0.001 = 0.00005 pu/tick
+- step_Q15 = 0.00005 × 2147483648 ˜ 107374
+
+Therefore, each speed-loop tick (every 1 ms), the per-unit speed reference changes by ~0.00005 pu (Q31 ˜ 107,374).
+
+Notes:
+- Provide separate parameters for acceleration and deceleration; deceleration can use a larger magnitude for quicker braking.
+- Clamp n_ref_pu within its valid range (e.g., [-1, +1]) before converting to rpm or passing to the speed PI.
+- This ramp is **independent of PWM frequency**; only the speed-loop period Ts_spd matters.
+
+---------------------------------------------------------------------------------------------------------------------------------
+4.33 MINIMUM SAMPLE TIME (Tmin)
+---------------------------------------------------------------------------------------------------------------------------------
+Defines the minimum required sampling window for ADC current acquisition (Q15, relative to PWM period).
+
+Background:
+- In single-shunt current sensing, ADC sampling is scheduled within active voltage vector windows (T1, T2).
+- If either vector window is too short, the sampling pulse cannot be placed correctly, resulting in invalid phase current.
+- Tmin ensures that only valid samples are accepted when the available window = Tmin.
+
+Calculation:
+
+    Tmin_pu = ( Tsample_min / T_pwm )
+
+Where:
+
+- Tsample_min = minimum ADC sample-and-hold duration + comparator/driver delay (hardware dependent)
+- T_pwm       = PWM period
+
+Implementation:
+
+- Tmin is expressed in per-unit (Q15), normalized by T_pwm:
+
+      Tmin_Q15 = round( Tmin_pu × 32768 )
+
+- During SVPWM calculation, if a candidate sampling window < Tmin, that current sample is discarded or substituted.
+
+Example:
+- T_pwm = 50 µs (20 kHz PWM)
+- Tsample_min (ADC + analog delays) = 2 µs
+- Tmin_pu = 2e-6 / 50e-6 = 0.04
+- Tmin_Q15 = 0.04 × 32768 ˜ 1311
+
+Notes:
+- Larger Tmin increases robustness but reduces the number of valid samples per PWM cycle.
+- Too small Tmin risks sampling during transients -> large current reconstruction error.
+- Must be tuned according to actual ADC acquisition time and driver delays.
+
+---------------------------------------------------------------------------------------------------------------------------------
+4.34 VBB MILIVOLT (Vbase choosen)
+---------------------------------------------------------------------------------------------------------------------------------
+Defines the the DC bus nominal voltage (mili volts).  
+
+- Vbase    = chosen voltage base in mV (constant)
+
+Choice of Vbase:
+- Typically set equal to the DC bus nominal voltage (e.g., 12 V, 24 V, or 48 V system).  
+- Can also be chosen as the maximum usable SVPWM linear voltage (˜ 0.577 × Vbus_nominal) for better dynamic range.  
+- Must remain consistent across control loops (PI controllers, observers, etc.).
+
+Example:
+- DC bus = 12 V nominal
+- Vbase_mV = 12000 mV
+
+---------------------------------------------------------------------------------------------------------------------------------
+4.35 SMO CURRENT DECAY FACTOR AND VOLTAGE GAIN (DERIVED FROM MOTOR PARAMETERS)
+---------------------------------------------------------------------------------------------------------------------------------
+Model (per axis, simplified Rs–L without cross-coupling):
+    
+	di/dt = (v - Rs·i - e) / L
+Forward-Euler per PWM tick Ts:
+
+    i[n+1] = i[n] + (Ts/L) · ( v[n] - Rs·i[n] - e[n] )
+
+Per-unit with bases (see 4.A):
+    
+	r_pu = Rs / Zbase
+    l_pu = L  / Lbase
+    K    = (Ts · omega_base) / l_pu
+	
+Discrete per-unit update:
+
+    i_pu[n+1] = i_pu[n] + K · ( v_pu[n] - r_pu·i_pu[n] - e_pu[n] )
+	i_pu[n+1] = (1 - K·r_pu)i_pu[n] + K · ( v_pu[n] - e_pu[n] )
+
+Definition:
+
+    currentDecay = 1 - K · r_pu      (Q15)
+	voltageGain  = K = (Ts · omega_base) / l_pu     (Q15)
+
+Worked Example:
+- From 4.A: Zbase = 2.4 Ohm, Lbase = 0.000382 H, omega_base = 6283 rad/s
+- Rs = 0.3 Ohm -> r_pu = 0.3 / 2.4 = 0.125
+- L  = 0.5 mH -> l_pu = 0.0005 / 0.000382 ˜ 1.309
+- Ts = 50 µs -> Ts·omega_base = 0.00005 · 6283 = 0.314
+- K = 0.314 / 1.309 ˜ 0.240
+- currentDecay = 1 - 0.240 · 0.125 = 0.970 -> Q15 ˜ 31785
+- voltageGain  = 0.240 -> Q15 = 0.240 · 32768 ˜ 7864
+
+Notes:
+- Computed directly from Rs, L, Ts and base values; no heuristic needed.
+- For salient machines, compute per axis: (decay_d, decay_q).
+
+---------------------------------------------------------------------------------------------------------------------------------
+4.36 SMO SLIDING GAIN (Kslide)
+---------------------------------------------------------------------------------------------------------------------------------
+Definition:
+
+    correction = sat(error, maxError) · Kslide
+	
+Where
+
+    Kslide_pu = Ksilde_actual / Z_base
+	
+For initial vaule
+
+	Kslide_pu = k · sqrt(R_pu^2 + (omegac_i · L_pu / omega_base))
+
+Guideline:
+
+- Choose Kslide to dominate estimation error at low speeds without
+  causing chattering. Start with 0.1–0.3 pu.
+
+Example:
+- Kslide = 0.2 pu -> Q15 ˜ 6554
+
+Notes:
+- Larger Kslide speeds up convergence but increases noise.
+- Smaller Kslide reduces noise but may lose observability at very low speed.
+
+---------------------------------------------------------------------------------------------------------------------------------
+4.37 SMO MAXIMUM ERROR THRESHOLD (LINEAR REGION)
+---------------------------------------------------------------------------------------------------------------------------------
+Definition:
+
+    maxError = boundary of the linear region for sat(error)
+	
+	Z = Kslide · sat (i_err / maxError)
+	
+Then
+
+	maxError_pu = maxError_actual / Ibase
+
+Example:
+- Ibase = 40 A
+- maxError_actual = 0.02 * Ibase =  0.8
+- maxError_pu = 0.8 pu * 32768 ~ 26214 (Q15)
+
+Notes:
+- Typical 1%-5% rated current, depending on current/voltage noise.
+- Tune jointly with Kslide for smooth yet responsive behavior.
+
+---------------------------------------------------------------------------------------------------------------------------------
+4.38 SMO BACK-EMF LPF COEFFICIENT
+---------------------------------------------------------------------------------------------------------------------------------
+One-pole IIR low-pass on raw back-EMF estimate:
+
+    emf[n+1] = (1 - K) · emf[n] + K · emf_raw[n]
+
+Design from desired cutoff f_c,emf (Hz), sampling fs = f_pwm:
+
+    K = 1 - exp( -2pi · f_c,emf / fs )
+
+Example:
+
+- f_pwm = 20 kHz, f_c,emf = 500 Hz
+- K = 1 - exp( -2p · 500 / 20000 ) ˜ 0.147 -> Q15 ˜ 4817
+
+Notes:
+- Larger K -> faster but noisier EMF; smaller K ->  smoother but slower.
+- Typical f_c,emf is 200–1000 Hz for current-loop PWMs at 10–40 kHz.
+
+---------------------------------------------------------------------------------------------------------------------------------
+4.39 PLL PROPORTIONAL&INTEGRAL GAIN (BANDWIDTH-BASED)
+---------------------------------------------------------------------------------------------------------------------------------
+PLL phase detector uses sin(theta_est - theta_obs). For small angles,sin(e) ˜ e (in radians). Let the target PLL bandwidth be
+omegac_pll (rad/s) with damping zata (˜0.7 default). A standard 2nd-order design:
+
+Continuous-time (small-angle, unity phase-detector gain):
+
+    Kp_pll = 2 · zata · omegac_pll
+    Ki_pll = omegac_pll²
+
+Discrete per-unit implementation:
+
+- Angle error e_theta must be in per-unit where 1 pu = pi rad:
+
+    e_theta_pu = e_theta_rad / pi
+	
+- Then controller in pu:
+
+    omega_corr_pu = Kp_pll_pu · e_theta_pu + Ki_pll_pu · Sum( e_theta_pu )
+
+Map to per-unit coefficients:
+
+    Kp_pll_pu = (Kp_pll / omega_base) · pi
+    Ki_pll_pu = (Ki_pll · Ts / omega_base) · pi
+
+
+FIXED-POINT IMPLEMENTATION (AUTO Q-FORMAT ADJUSTMENT):
+
+By default, both Kp_pll and Ki_pll are represented in Q15 format (1.0 = 32767).
+
+If either gain exceeds 1.0, the number of fractional bits is reduced to prevent overflow while keeping the int16 data type
+unchanged.
+
+Automatic adjustment rule:
+
+| Condition            | Q-format | Dynamic range |
+|----------------------|-----------|----------------|
+| |K| = 1.0            | Q15       | ±1.0           |
+| 1.0 < |K| = 2.0      | Q14       | ±2.0           |
+| 2.0 < |K| = 4.0      | Q13       | ±4.0           |
+| 4.0 < |K| = 8.0      | Q12       | ±8.0           |
+| 8.0 < |K| = 16.0     | Q11       | ±16.0          |
+
+This ensures PLL loop gains remain within range in fixed-point arithmetic without requiring wider data types or external scaling.
+
+
+EXAMPLE:
+
+Given:
+    omega_base = 6283 rad/s
+    Ts = 50 µs
+    omegac_pll = 200 rad/s
+    zeta = 0.7
+
+Compute:
+    Kp_pll = 2 × 0.7 × 200 = 280
+    Ki_pll = 200² = 40000
+
+Per-unit mapping:
+    Kp_pll_pu = (280 / 6283) × pi = 0.140
+    Ki_pll_pu = (40000 × 50e-6 / 6283) × pi = 0.0010
+
+-> Both = 1.0 -> use Q15
+    Kp_Q15 = 0.140 × 32768 = 4588
+    Ki_Q15 = 0.0010 × 32768 = 33
+
+If Kp_pll_pu = 3.0 and Ki_pll_pu = 1.5 -> max(|K|) = 3.0 -> use Q13
+    scale = 2^13 = 8192
+    Kp_Q13 = 3.0 × 8192 = 24576
+    Ki_Q13 = 1.5 × 8192 = 12288
+
+This keeps both PLL gains within ±32767 in int16 fixed-point representation.
+
+Notes:
+- Ensure PLL bandwidth << current-loop bandwidth and <= observer EMF bandwidth.
+- If using sin(e) directly in fixed-point, no need for small-angle scaling; treat sin(e) output as the phase detector signal.
+- If oscillation appears, reduce Kp first, then reduce Ki proportionally.
+- If lock-in is too slow, increase Kp slightly while keeping zeta ˜ 0.7.
+
+---------------------------------------------------------------------------------------------------------------------------------
+4.40 PLL ANGLE PREDICTION CONSTANT  (K_Td)
+---------------------------------------------------------------------------------------------------------------------------------
+Fixed time-lead compensation to offset total system delay in angle usage:
+
+    Theta_pred = Theta_PLL + K_Td · Theta_PLL
+
+where:
+- Theta_pred  : predicted (lead) electrical angle used by Park_INV / SVM
+- Theta_PLL   : instantaneous angle output of PLL (or arctan observer)
+- Theta_PLL   : estimated electrical speed (per-unit or Q15)
+- K_Td    : time-lead constant (in seconds), representing total system delay T_d
+
+Design concept:
+
+    The total system delay T_d is mainly composed of:
+        • sampling and ADC latency
+        • numerical filter delay in SMO / EMF LPF
+        • computation and PWM update latency
+    Angle error grows with speed as delta_Theta = omega · T_d.  
+    To compensate, we predict theta ahead by omega · T_d.
+
+Implementation in fixed-point (Q15):
+
+    Theta_pred_q15 = Theta_q15 + ( omega_q15 × K_Td_q15 ) >> 15
+
+where:
+    K_Td_q15 = ( T_d / T_s )
+
+Example:
+
+- PWM frequency f_pwm = 20 kHz  ->  T_s = 50 µs
+- Effective delay T_d = 0.75 × T_s = 37.5 µs
+- K_Td = 0.75  ->  Q15 ˜ 0.75 × 32768 = 24576
+
+Notes:
+- Typical T_d is 0.6–1.0 × T_s depending on ADC, SMO LPF and PWM update sequence.
+- Larger K_Td -> stronger phase-lead (may cause overshoot); smaller -> residual lag (E_d increase at high speed).
+- Usually tuned once during commissioning and kept constant; no need to vary with speed.
+- For verification, plot E_d vs. speed; correct K_Td keeps E_d ˜ 0 across all speeds.

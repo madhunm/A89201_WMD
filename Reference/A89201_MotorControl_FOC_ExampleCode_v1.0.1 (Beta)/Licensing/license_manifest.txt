@@ -1,0 +1,3 @@
+This distrubution is released under the terms of the Allegro Microsystems Inc. software licensing agreement (see End User Software License Agreement.pdf) and applies to all of contents herein including and limited to source code, documentation, templates, examples and binary files except where specified otherwise.
+	
+This distribution is designated as EAR99.

@@ -1,0 +1,10 @@
+Third Party Licenses
+-------------------
+
+This software contains the following elements of open-source software:
+
+1. CMSIS ARM Cortex M4 device startup files in the source directory:
+   startup_ARMCM4_debug.s, startup_ARMCM4_release.s, system_ARMCM4.cpp
+   License Type: Apache 2.0 - https://www.apache.org/licenses/LICENSE-2.0
+
+Find the full license file available in the third_party_licenses folder.

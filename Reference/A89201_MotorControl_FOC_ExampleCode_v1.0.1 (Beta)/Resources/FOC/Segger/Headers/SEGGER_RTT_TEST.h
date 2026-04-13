@@ -1,0 +1,52 @@
+#ifndef HEADER_SEGGER_RTT_TEST_H
+#define HEADER_SEGGER_RTT_TEST_H
+
+/**
+ * @file         Segger_Rtt.h
+ * @author       B. Shao
+ * @version      1.0
+ *
+ * @brief        Buffer for Segger RTT J-scope configuration
+ *
+ * @copyright (c) 2025 Allegro MicroSystems, Inc. All Rights Reserved.
+ * The information contained in this file is confidential and proprietary.
+ *
+ * The information contained in this file is governed by Software License
+ * acknowledged during the download from Allegro's Software Download
+ * Portal. You may obtain a copy of the Software License at
+ * https://www.allegromicro.com/en/about-allegro/legal.
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the Software License is distributed on an AS IS BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
+ * express or implied. See the Software License for the specific language
+ * governing permissions and limitations under the License.
+ *
+ * You understand that the Software is subject to export control laws and
+ * regulations. YOU MAY NOT DOWNLOAD OR OTHERWISE EXPORT
+ * OR RE-EXPORT THE SOFTWARE OR ANY UNDERLYING
+ * INFORMATION OR TECHNOLOGY EXCEPT IN FULL COMPLIANCE
+ * WITH ALL UNITED STATES AND OTHER APPLICABLE LAWS AND
+ * REGULATIONS.
+ *
+ */
+#include "SEGGER_RTT.h"
+#include "SEGGER_RTT_Conf.h"
+
+
+volatile uint16_t JS_RTT_UpBuffer[2048];
+
+typedef struct{
+		volatile int32_t timestamp;
+		volatile int32_t msg_i32_1;
+		volatile int32_t msg_i32_2;
+		volatile int32_t msg_i32_3;
+}RTT_MSG_T4I4I4I4;
+
+const uint8_t JscopeChannel = 1;
+
+int _Timestamp = 0;
+
+RTT_MSG_T4I4I4I4 rtt_JsMsg;
+
+#endif //HEADER_SEGGER_RTT_TEST_H

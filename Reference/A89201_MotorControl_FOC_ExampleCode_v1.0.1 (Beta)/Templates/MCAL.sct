@@ -1,0 +1,128 @@
+#! armclang --target=arm-arm-none-eabi -march=armv7-m -E -x c
+
+; ******************************************************************************
+; *** Scatter-Loading Description File                                       ***
+; *** The first line specifies that the armclang preprocessor is to be used. ***
+; *** RELEASE definitions                                                    ***
+; ******************************************************************************
+
+// Copyright (c) 2018-24 Allegro Microsystems Inc. All rights reserved.
+// Version 1.0.0
+
+// Scatter file notes
+// Executable regions reside in load regions
+// Executable regions are contiguous within a load region
+// To place an executable region at an address memory that does not immediately follow
+// another executable region requires a new load region to be created. 
+// See 8.4.3 Execution region attributes for definitions
+// UNINIT is not initialised to zero
+// EMPTY causes a bss variable to be placed that fills the region which is initialised to zero
+
+// ### Define the instruction memory layout: Flash ###
+// ---------------------------------------------------
+// Define load regions - for 256K Flash part.
+#define CODE_MEMORY_SIZE     0x40000
+#define LR_IROM1_START       0x08000000
+#define LR_IROM1_SIZE        0x36000
+#define RESERVED_FLASH_START 0x08036000		// BootROM patch reserved region: page 54 (0x36)
+#define RESERVED_FLASH_SIZE  0x1000
+#define LR_IROM2_START       RESERVED_FLASH_START + RESERVED_FLASH_SIZE
+#define LR_IROM2_SIZE        0x09000
+
+// Define executable regions
+#define ER_IROM1_START       LR_IROM1_START
+#define ER_IROM1_SIZE        LR_IROM1_SIZE
+#define DATABLOCK_START      RESERVED_FLASH_START + RESERVED_FLASH_SIZE
+#define ER_IROM3_START		 RESERVED_FLASH_START + RESERVED_FLASH_SIZE
+#define ER_IROM3_SIZE	     0x9000
+
+
+// ### Define the data memory layout: RAM ###
+// ------------------------------------------
+// 32K RAM: 0x20000000 to 0x20007FFF
+#define DATA_MEMORY_SIZE    0x8000
+#define HEAP_SIZE           0x2000
+#define STACK_SIZE          0x1000
+
+// Define a RAM space that is not initialised to zero on startup
+#define RESERVED_RAM_START  0x20000000
+#define RESERVED_RAM_SIZE   0x0008
+
+// Define reserved RAM used by Boot ROM Library Flash functions
+#define FLASH_RAM_START     0x200009B8
+#define FLASH_RAM_SIZE      0x0028
+
+// Define RAM region 1
+#define MAIN_RAM_START      0x20000008
+#define RW_IRAM1_START      (RESERVED_RAM_START + RESERVED_RAM_SIZE)
+#define RW_IRAM1_SIZE       (MAIN_RAM_START - RW_IRAM1_START) 
+
+// Define RAM region 2
+#define RW_IRAM2_START      (FLASH_RAM_START + FLASH_RAM_SIZE)
+#define RW_IRAM2_SIZE       (DATA_MEMORY_SIZE - HEAP_SIZE - STACK_SIZE - RESERVED_RAM_SIZE - FLASH_RAM_SIZE )
+
+// Stack and heap - aligned on an eight byte boundary
+#define HEAP_START          0x20004000	
+#define STACK_START         0x20006F00  ; This is the start of the stack area. The stack pointer will use this number + the Stack_Size declared in the assembler file to set the stack pointer on POR.
+
+LR_IROM1 LR_IROM1_START LR_IROM1_SIZE   ; load region size_region
+{ 
+  ER_IROM1 ER_IROM1_START ER_IROM1_SIZE ; load address = execution address 
+  {    
+    *.o (RESET, +First)                 ; RESET section is first section (startup_armcm4.o)
+    *(InRoot$$Sections)                 ; All library sections that must be in a root region e.g. __main.o, __scatter*.o, __dc*.o, and * Region$$Table
+    *armlib*(+RO)                       ; ARM C library
+	*(.text*)
+  }
+
+  ER_IROM2 RESERVED_FLASH_START RESERVED_FLASH_SIZE
+  {
+  }
+  
+  ER_IROM3 ER_IROM3_START ER_IROM3_SIZE
+  {
+    .ANY(+RO)
+	.ANY(+XO)
+  }
+
+  ; RW data #1
+  RW_IRAM1 RW_IRAM1_START RW_IRAM1_SIZE  
+  {  
+    .ANY1 (+RW +ZI)
+  }
+  
+  ; RAM reserved for Flash drivers resident in BootROM memory.
+  FLASH FLASH_RAM_START UNINIT FLASH_RAM_SIZE
+  {
+  }
+  
+  ; RW data #2
+  RW_IRAM2 RW_IRAM2_START RW_IRAM2_SIZE  
+  {  
+    .ANY2 (+RW +ZI)
+  }
+    
+  ; This defines where the HEAP is placed
+  HEAP HEAP_START UNINIT HEAP_SIZE 
+  {
+    *(HEAP)
+  }
+  
+  ; This defines where the stack is placed
+  STACK STACK_START UNINIT STACK_SIZE  
+  {
+    *(STACK)
+  }
+}
+
+; In order that the execution address is the same as the load address another load section needs to be created.
+; Without this, the code is loaded immediately after the ER_IROM2 section
+LR_IROM2 LR_IROM2_START LR_IROM2_SIZE   ; load region size_region
+{ 
+  DATABLOCK DATABLOCK_START             ;
+  {
+    *(.init_array)                      ; Section .init_array must be placed explicitly,
+                                        ; otherwise it is shared between two regions.
+    *(+RO-DATA)
+  }
+}

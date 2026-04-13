@@ -22,8 +22,8 @@ PD3/PD4 ─────────────►  │ GPIO                    
 APS12202 ×3 ──────────►  │ PD0/PD1/PD2 → AMCT (Hall subsystem)            │
   (rotor position)       │      └─► Commutation Sector, Speed Estimate     │
                          │                                                  │
-A1333 ─────────────────►  │ PD5/PD6 (ABI A/B) → GPIO interrupts → quadrature count  │
-  (output shaft angle)   │ PD7 (PWM out) → GTU TIMER5/6 duty-cycle → absolute angle │
+A1333 ──── SPI ────────►  │ SCI0 SPI (PD4=CS, PD5=SCK, PD6=MOSI, PD7=MISO)          │
+  (output shaft angle)   │ SCI0 SPI (PD4-7) → angle + EF + UV + parity (0.088°)     │
                          │      └─► ABI: 0.044°/step + PWM absolute anchor (0.4°)  │
                          │                                                  │
                          │ CAU ← PGU triggers (3× per PWM cycle)           │
@@ -87,15 +87,15 @@ Wait — corrected from design specification:
 | Command State       | PD3 | PD4 | Speed Target | Tolerance |
 |---------------------|-----|-----|--------------|-----------|
 | Park / Stop         | 0   | 0   | 0 RPM        | Park position |
-| Low speed           | 1   | 0   | 40 RPM       | ±2 RPM    |
-| High speed          | 0   | 1   | 60 RPM       | ±2 RPM    |
-| Invalid (fault)     | 1   | 1   | SAFE STATE   | —         |
+| Low speed           | PD3=1 | IG=0 | 40 RPM    | ±2 RPM    |
+| High speed          | PD3=0 | IG=1 | 60 RPM    | ±2 RPM    |
+| Invalid (fault)     | PD3=1 | IG=1 | SAFE STATE  | —         |
 
 ### 2.3 Angle Target
 
-- Wiper operates within a defined mechanical arc (e.g., 0° park to 120° maximum sweep)
+- Wiper operates within a configurable mechanical arc — MIN_ANGLE_DEG (park) and MAX_ANGLE_DEG (reversal) stored in flash calibration page and set at EOL
 - At any speed command, the controller regulates speed while maintaining awareness of the end-stop positions
-- At park command (PD3=PD4=0): position controller drives wiper to park angle (stored in flash as `PARK_ANGLE_DEG`)
+- At park command (PD3=PD4=0): position controller drives wiper to `calData.parkAngleDeg` (stored in flash page 60)
 - Position accuracy at park and reversal points: **±1°** (confirmed requirement; end-of-line calibration + optional temperature compensation implemented in firmware)
 
 ### 2.4 Current Limits
@@ -119,7 +119,7 @@ Wait — corrected from design specification:
 | 4        | SCU fault           | Log fault, enter safe state             | < 5 µs       |
 | 5        | GPIO (PD3/PD4)      | Decode speed command, debounce          | < 2 µs       |
 | 6        | GTU overflow        | Watchdog tick, background timers        | < 2 µs       |
-| 7        | GTU7 (PWM period)   | Capture PWM high-time + period, update absolute angle  | < 2 µs       |
+| 7        | SCI0 RX complete    | Store A1333 angle result, check EF/UV/parity           | < 2 µs       |
 | 8 (lowest)| LIN / DAU / DMA    | Background diagnostics                  | < 10 µs      |
 
 Total worst-case ISR execution budget within one 50 µs PWM period:
@@ -199,17 +199,20 @@ void main(void) {
 1. SCU init
    ├── Set mcuclk: CPU = 40 MHz
    ├── Configure WDT period = 10 ms
-   ├── Set GPIO mux: sel_uart0 → assign UART RX pin for debug UART (development only)
-   ├── sel_spi0 → leave at reset value (SPI0 not used at runtime)
+   ├── Set sel_spi0 = 7 (routes PD7 to SCI0 SPI RX/MISO)
+   ├── Set sel_uart1 → assign UART RX pin for debug UART (development only, SCI1)
    ├── Clear intstat/diag (POR flags)
    └── Enable SCU interrupts (VD50 UV, WDT, GDU fault, ECC error)
 
 2. GPIO init
    ├── PD0–PD2: input, pull-up enabled (Hall latches)
    ├── PD3–PD4: input, pull-down enabled (speed commands)
-   ├── PD5: input, no pull (A1333 ABI A — push-pull from A1333)
-   ├── PD6: input, no pull (A1333 ABI B — push-pull from A1333)
-   └── PD7: input, no pull (A1333 PWM output — routed to GTU timer for duty-cycle measurement)
+   ├── PD4: SPI0_CSOUT output (ASRCSEL=0100b, AOSEL=1)
+   ├── PD5: SPI0_SCKOUT output (ASRCSEL=0010b, AOSEL=1)
+   ├── PD6: SCI0_Tx output/MOSI (ASRCSEL=0000b, AOSEL=1)
+   ├── PD7: input, no pull (SPI0 MISO, sel_spi0=7)
+   ├── IG: read as digital input (high-speed command, no GPIO config needed)
+   └── LIN: not configured (reserved for future use)
 
 3. SCI0 init (UART debug only — disabled in production build; clock-gated via SCU)
    SCI1: not configured
@@ -220,18 +223,18 @@ void main(void) {
 
 5. A1333 init
    ├── Wait ≥30 ms (A1333 power-on self-test period — tPO)
-   ├── At EOL only (external programmer via SPI test pads, not at runtime):
+   ├── At EOL only (external programmer via SPI test pads):
    │     Verify LBIST passed (ERR[3]=0)
    │     Configure RESOLUTION_PAIRS = 3 (2048 PPR ABI)
-   │     Configure PWM carrier frequency = 1 kHz
-   │     Write ZERO_OFFSET calibration value
-   │     Lock EEPROM after calibration
+   │     Write ZERO_OFFSET = 0 (park calibration done in firmware, stored in flash)
+   │     Lock EEPROM after confirmed good
    ├── At runtime (firmware):
-   │     Configure PD5/PD6 as GPIO inputs, no pull (ABI A/B)
-   │     Configure PD7 as GTU TIMER5/TIMER6 input (PWM) — not GPIO interrupt
-   │     Enable GPIO interrupts on PD5/PD6 (both edges each)
-   │     Wait for TIMER5 first capture (≤1 ms) → seed abi_count from pwm_absolute_angle_deg
-   └── No homing routine required — absolute angle available immediately from PWM
+   │     SCI0 SPI enabled (PD4=CS, PD5=SCK, PD6=MOSI, PD7=MISO)
+   │     Wait for A1333 tPO (30 ms already elapsed)
+   │     First SPI read register 0x20 → verify EF=0, UV=0, parity
+   │     Read ERR register (0x24) → verify LBIST bit = 0
+   │     angle_deg = raw × (360/4096) − calData.zeroOffsetDeg
+   └── Absolute reference established at first park event — see Section 13
 
 6. CAU init
    ├── Set gain: DAG=10, SAG=20
@@ -296,7 +299,7 @@ Motor speed (output shaft RPM) computed from Hall timer in AMCT:
 /* AMCT provides time between Hall transitions (in timer counts) */
 /* Motor RPM (output shaft) = 60 / (6 × P × T_hall_seconds × gear_ratio) */
 /* Where P = pole-pairs, gear_ratio = 39 */
-/* For P=4: RPM_output = 60 / (6 × 4 × T_hall_sec × 39) */
+/* For P=2: RPM_output = 60 / (6 × 2 × T_hall_sec × 39) */
 float ComputeOutputRPM(uint32_t hall_timer_counts, uint32_t timer_freq_hz) {
     float T_hall_sec = (float)hall_timer_counts / (float)timer_freq_hz;
     return 60.0f / (6.0f * POLE_PAIRS * T_hall_sec * GEAR_RATIO);
@@ -355,8 +358,8 @@ Iq_demand = CLAMP(Iq_demand, -CONTINUOUS_CURRENT_A, CONTINUOUS_CURRENT_A);
 | Reserved (protected)| 0x0803_F000 (page 63)| 4 kB   | Allegro reserved                |
 
 **Calibration data page** stores:
-- `PARK_ANGLE_DEG` (float, 4 bytes): A1333 angle reading at wiper park position
-- `MAX_ANGLE_DEG` (float, 4 bytes): A1333 angle at maximum sweep position
+- `parkAngleDeg` (float): ABI angle at mechanical park position
+- `reversalAngleDeg` (float): ABI angle at maximum sweep position (configurable at EOL)
 - `KP_POS`, `KI_POS`, `KP_SPD`, `KI_SPD`, `KP_CUR`, `KI_CUR`: PID gains
 - CRC32 of all calibration data (for integrity check at startup)
 
@@ -407,7 +410,7 @@ Recovery from safe state requires a power cycle or explicit external reset (unle
 
 ```c
 /* Motor and mechanical parameters */
-#define POLE_PAIRS          4       /* Motor pole pairs — verify against motor spec */
+#define POLE_PAIRS          2       /* Motor pole pairs — confirmed 2-pole-pair motor */
 #define GEAR_RATIO          39      /* Worm gearbox ratio */
 #define PWM_FREQ_HZ         20000   /* 20 kHz PWM */
 #define CPU_FREQ_HZ         40000000
@@ -417,10 +420,11 @@ Recovery from safe state requires a power cycle or explicit external reset (unle
 #define SPEED_HIGH_RPM      60.0f
 #define SPEED_TOLERANCE_RPM 2.0f
 
-/* Angle targets */
-#define ANGLE_TOLERANCE_DEG 0.5f
-#define PARK_ANGLE_DEG      (read from flash at startup)
-#define MAX_SWEEP_ANGLE_DEG (read from flash at startup)
+/* Angle targets — loaded from WiperCalData_t in flash page 60 */
+#define ANGLE_TOLERANCE_DEG  1.0f           /* ±1° position accuracy requirement */
+#define OVERRUN_TOLERANCE_DEG 2.0f          /* Extra travel before hard fault */
+/* calData.parkAngleDeg     — park position (flash)     */
+/* calData.reversalAngleDeg — reversal position (flash) */
 
 /* Current limits */
 #define CONTINUOUS_CURRENT_A  6.0f
@@ -437,15 +441,15 @@ Recovery from safe state requires a power cycle or explicit external reset (unle
 #define DT_SPEED_S            (DT_CURRENT_S * 10)            /* 500 µs = 2 kHz */
 #define DT_POSITION_S         (DT_CURRENT_S * 20)            /* 1 ms = 1 kHz */
 
-/* A1333 ABI + PWM */
-#define ABI_RESOLUTION_PPR    2048         /* RESOLUTION_PAIRS=3 in EEPROM */
-#define ABI_CPR               (ABI_RESOLUTION_PPR * 4)  /* 8192 counts/rev */
-#define ABI_DEG_PER_COUNT     (360.0f / ABI_CPR)        /* 0.04394531 deg */
-#define A1333_PWM_CARRIER_HZ  1000         /* 1 kHz configured at EOL */
-#define A1333_PWM_DUTY_MIN    0.05f        /* 5% = 0 deg */
-#define A1333_PWM_DUTY_MAX    0.95f        /* 95% = 360 deg */
-#define ABI_FUSION_THRESHOLD_DEG  0.088f   /* 2 ABI steps before correction */
-#define ABI_LARGE_DRIFT_DEG   2.0f         /* Drift worth logging */
+/* A1333 SPI interface (PD4=CS, PD5=SCK, PD6=MOSI, PD7=MISO) */
+#define A1333_SPI_CLK_HZ        4000000           /* 4 MHz, A1333 max = 10 MHz */
+#define A1333_ANGLE_REG         0x2000            /* Register 0x20, R/W=read, 12-bit angle */
+#define A1333_ERR_REG           0x2400            /* Register 0x24, error flags */
+#define A1333_WARN_REG          0x2600            /* Register 0x26, warning flags */
+#define A1333_TSEN_REG          0x2800            /* Register 0x28, temperature sensor */
+#define A1333_DEG_PER_COUNT     (360.0f / 4096.0f) /* 0.0879°/count, 12-bit */
+#define A1333_FAULT_THRESHOLD   3                 /* consecutive read failures before fault */
+#define A1333_DIAG_RATE_HZ      10                /* diagnostic register poll rate */
 
 /* Watchdog */
 #define WDT_PERIOD_MS         10
@@ -473,7 +477,7 @@ WiperController/
 │   └── hal_fli.c / .h      — Flash read/write for calibration data
 │
 ├── drivers/
-│   ├── a1333.c / .h        — A1333 ABI quadrature decode, PWM duty-cycle angle, plausibility checks
+│   ├── a1333.c / .h        — A1333 SPI read/write, angle read, diagnostic polling, EEPROM access
 │   └── aps12202.c / .h     — Hall latch read (thin wrapper over GPIO)
 │
 ├── control/
@@ -502,10 +506,10 @@ The following assumptions were made in the absence of explicit design decisions.
 
 | Item | Assumption | Must confirm |
 |------|-----------|--------------|
-| Motor pole pairs | 4 pole-pairs | Verify against actual motor datasheet |
-| Wiper arc | 0–120° at output shaft | Verify mechanical design |
+| Motor pole pairs | 2 pole-pairs | **Confirmed** |
+| Wiper arc | Configurable — stored in flash (MIN_ANGLE_DEG, MAX_ANGLE_DEG) | Set at EOL via calibration procedure |
 | A1333 package | LE (14-pin, single die) | **Confirmed** |
-| A1333 ABI resolution | RESOLUTION_PAIRS=3 (2048 PPR) | Verify EOL programmer configures this before production |
+| A1333 SPI mode | Mode 3 (CPOL=1, CPHA=1) inferred from timing | Verify on first bring-up with scope |
 | A1333 angle accuracy | ±1° over temperature | **Confirmed acceptable** |
 | A1333 calibration | End-of-line offset cal + optional temp comp | Design decision confirmed |
 | MOSFET selection | Not specified | Required for GDU dead-time and drive-strength config |
@@ -514,13 +518,13 @@ The following assumptions were made in the absence of explicit design decisions.
 | Hall placement offset | Zero (no AMCT phase shift) | Verify mechanically at assembly |
 | PID gains | TBD — must be tuned on hardware | Cannot pre-calculate without motor inertia/back-EMF data |
 | Speed command debounce | 5 ms | Tune based on actual signal quality from vehicle BCM |
-| Startup angle acquisition | PWM duty-cycle read via GTU — immediate on power-up, no homing needed | **Resolved — design confirmed** |
+| Startup angle acquisition | SPI read of register 0x20 after 30 ms tPO — absolute, no homing | **Confirmed** |
 
 ---
 
 ## 13. Startup Angle Acquisition
 
-With PD7 connected to A1333 PWM output and GTU measuring duty cycle, absolute angle is available within one PWM carrier period (≤1 ms at 1 kHz carrier, configured at EOL). No homing routine or index search is required.
+A1333 connected via SPI (PD4=CS, PD5=SCK, PD6=MOSI, PD7=MISO). SPI angle register 0x20 provides absolute shaft angle immediately after A1333 power-on time (tPO ≥ 30 ms). No homing routine required.
 
 ### Startup Sequence
 
@@ -529,44 +533,47 @@ Power-on
    │
    ├── Wait ≥30 ms (A1333 tPO + LBIST)
    │
-   ├── GTU5: period measurement on PD7 → T_period (counts)
-   │   GTU6: high-time measurement on PD7 → T_high (counts)
-   │   Both start simultaneously; first valid capture ≤ 1 ms
+   ├── First SPI read: send 0x2000 to register 0x20
+   │     Check EF=0, UV=0, parity valid
+   │     angle_deg = raw * (360.0 / 4096.0) − calData.zeroOffsetDeg
    │
-   ├── Compute absolute angle:
-   │     duty = (float)T_high / (float)T_period
-   │     if (duty < 0.05f || duty > 0.95f) → A1333_FAULT (out of range)
-   │     angle_deg = (duty - 0.05f) / 0.90f * 360.0f
-   │     angle_deg += PARK_ANGLE_OFFSET_DEG   /* from flash calibration */
+   ├── absolute_angle_valid = true → position controller may start
    │
-   ├── Seed ABI counter:
-   │     abi_count = (int32_t)(angle_deg / ABI_DEG_PER_COUNT)
-   │     abi_prev  = (GPIO_ReadPin(PD5) << 1) | GPIO_ReadPin(PD6)
-   │
-   ├── Enable GPIO interrupts: PD5 both edges, PD6 both edges
-   │
-   └── absolute_angle_valid = true → control loop may start
+   └── Read ERR register (0x24): verify LBIST bit (ERR[3]) = 0
+         If LBIST failed → FAULT_A1333_LBIST, enter safe state
 ```
 
-### PWM Angle Formula
+### Configurable Wiper Arc
+
+Arc limits stored in flash page 60 (calibration), set at EOL:
 
 ```c
-/* A1333 PWM: 5% duty = 0°, 95% duty = 360° */
-/* angle = (duty - 0.05) / 0.90 * 360 */
-float PWM_ToAngleDeg(uint16_t t_high, uint16_t t_period) {
-    if (t_period == 0) return -1.0f;              /* invalid */
-    float duty = (float)t_high / (float)t_period;
-    if (duty < 0.04f || duty > 0.96f) return -1.0f; /* out of range */
-    return (duty - 0.05f) / 0.90f * 360.0f;
-}
+typedef struct {
+    float     parkAngleDeg;        /* SPI angle at mechanical park position */
+    float     reversalAngleDeg;    /* SPI angle at maximum sweep position */
+    float     zeroOffsetDeg;       /* Offset applied to every SPI angle reading */
+    float     calPoints_raw[8];    /* Optional linearity correction table */
+    float     calPoints_ref[8];
+    uint8_t   calPointCount;
+    uint32_t  crc32;
+} WiperCalData_t;
 ```
 
-### Periodic PWM Resync (Runtime)
+Position limits enforced every control cycle:
+```c
+if (angle_deg < calData.parkAngleDeg    - OVERRUN_DEG) EnterSafeState(FAULT_UNDER_TRAVEL);
+if (angle_deg > calData.reversalAngleDeg + OVERRUN_DEG) EnterSafeState(FAULT_OVER_TRAVEL);
+```
 
-The PWM output continues running while ABI is active. Use GTU7 in period+high-time mode to capture the current PWM angle at 10 Hz and compare to the ABI counter. If they diverge by more than 2° (after accounting for ABI resolution), resync the ABI counter to the PWM value and flag a `WARN_ABI_RESYNC`. More than 3 resyncs per minute indicates accumulated ABI edge loss — escalate to `FAULT_ABI_DEGRADED`.
+EOL procedure:
+1. First SPI read → immediate absolute angle (no drive needed)
+2. Drive to mechanical park stop → write `parkAngleDeg` = current SPI angle
+3. Drive to reversal stop → write `reversalAngleDeg`
+4. Write CRC, program flash page 60
 
-### Hall-Only Fallback
+### Fallback: Hall-Only Mode
 
-If both ABI and PWM fail (A1333 VCC lost, GTU misconfiguration), the Hall sector gives a fallback angle estimate:
-
-For P=4 pole-pairs, gear ratio=39: one Hall sector = 60° electrical = 7.5° motor shaft = **0.19° output shaft**. Sufficient for safe park manoeuvre — drive Hall-only at slow speed to mechanical end-stop, then declare sensor fault and hold position.
+If A1333 SPI fails at startup (3 consecutive read errors):
+- P=2, gear ratio=39: Hall sector = 0.385° output shaft ≈ ±0.19° uncertainty
+- Enable Hall-only commutation, drive to park at ≤15 RPM
+- Set FAULT_A1333_COMM, hold position, await reset

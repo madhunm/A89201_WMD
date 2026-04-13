@@ -13,11 +13,11 @@
 ```
 Vehicle BCM
    │  │
-   │  └── High-Speed CMD ──► PD4 (GPIO input, pull-down)
+   │  └── High-Speed CMD ──► IG pin (dedicated HV input, no GPIO)
    └───── Low-Speed CMD  ──► PD3 (GPIO input, pull-down)
 
                          ┌──────────────── A89201C ────────────────────────┐
-PD3/PD4 ─────────────►  │ GPIO                                             │
+PD3 + IG ────────────►  │ GPIO (PD3) + IG (dedicated HV)                   │
                          │  └─► Speed Command Decoder                      │
 APS12202 ×3 ──────────►  │ PD0/PD1/PD2 → AMCT (Hall subsystem)            │
   (rotor position)       │      └─► Commutation Sector, Speed Estimate     │
@@ -53,7 +53,7 @@ CSP/CSM (2 mΩ shunt) ──► │     └─► Phase current samples         
 The firmware implements a **three-loop cascade controller**:
 
 ```
-Speed Command (PD3/PD4)
+Speed Command (PD3=low, IG=high)
         │
         ▼
 [1] Position/Angle Controller   (outer loop, 1 kHz)
@@ -95,7 +95,7 @@ Wait — corrected from design specification:
 
 - Wiper operates within a configurable mechanical arc — MIN_ANGLE_DEG (park) and MAX_ANGLE_DEG (reversal) stored in flash calibration page and set at EOL
 - At any speed command, the controller regulates speed while maintaining awareness of the end-stop positions
-- At park command (PD3=PD4=0): position controller drives wiper to `calData.parkAngleDeg` (stored in flash page 60)
+- At park command (PD3=0 AND IG=0): position controller drives wiper to `calData.parkAngleDeg` (stored in flash calibration page)
 - Position accuracy at park and reversal points: **±1°** (confirmed requirement; end-of-line calibration + optional temperature compensation implemented in firmware)
 
 ### 2.4 Current Limits
@@ -117,7 +117,7 @@ Wait — corrected from design specification:
 | 2        | AMCT Hall event     | Update sector, speed estimate           | < 2 µs       |
 | 3        | PGU period event    | Update PWM duty, run speed/pos PI       | < 10 µs      |
 | 4        | SCU fault           | Log fault, enter safe state             | < 5 µs       |
-| 5        | GPIO (PD3/PD4)      | Decode speed command, debounce          | < 2 µs       |
+| 5        | GPIO (PD3 only)     | Low speed command change, debounce      | < 2 µs       |
 | 6        | GTU overflow        | Watchdog tick, background timers        | < 2 µs       |
 | 7        | SCI0 RX complete    | Store A1333 angle result, check EF/UV/parity           | < 2 µs       |
 | 8 (lowest)| LIN / DAU / DMA    | Background diagnostics                  | < 10 µs      |
@@ -145,18 +145,30 @@ void PGU_Period_ISR(void) {
     /* 6. Kick watchdog */
 }
 
-/* Triggered by AMCT Hall transition */
-void AMCT_Hall_ISR(void) {
-    /* 1. Update commutation sector */
-    /* 2. Apply new commutation vector to PGU (enable correct phase pair) */
-    /* 3. Compute instantaneous speed from AMCT timer */
+/* Triggered by AMCT Hall sector change (IRQ17 — Amct_IrqHandler) */
+void Amct_IrqHandler(void) {
+    /* 1. Update commutation sector from AMCT_COMU_SECTION register */
+    /* 2. Apply new six-step vector to PGU phase outputs */
+    /* 3. Compute instantaneous speed from AMCT_HALL_FREQ register */
 }
 
-/* Triggered by GDU fault line */
-void GDU_Fault_ISR(void) {
+/* Triggered by GDU fault (IRQ13 — GduMaster_IrqHandler) */
+void GduMaster_IrqHandler(void) {
     /* 1. Immediately clear ENABLE pin (hardware safe state) */
     /* 2. Set global fault flag */
-    /* 3. Log fault type from GDU register */
+    /* 3. Log fault type from GDU STATUS register */
+}
+
+/* GPIO shared ISR (IRQ16 — Gpio_IrqHandler) — single entry for ALL PD0-PD7 */
+void Gpio_IrqHandler(void) {
+    /* Read EVENT_STATUS (0x40008068) to identify which pin(s) fired */
+    uint32_t events = *(volatile uint32_t*)0x40008068U;
+    *(volatile uint32_t*)0x40008068U = events;  /* write-1-to-clear */
+
+    if (events & (1U << 3)) {                   /* PD3: low speed command */
+        SpeedCommand_ProcessChange(eSPEED_LOW, (GPIO_PDIN >> 3) & 1U);
+    }
+    /* PD0-PD2 GPIO interrupts are NOT enabled — AMCT + GTU handle Hall directly */
 }
 ```
 
@@ -197,6 +209,8 @@ void main(void) {
 
 ```
 1. SCU init
+   ├── Disable WDT immediately on entry (Scu_WatchdogDisable) — re-enable after all init
+   ├── Enable flash instruction prefetch: Scu_SetFlashControlPreFetchEnable(True)
    ├── Set mcuclk: CPU = 40 MHz
    ├── Configure WDT period = 10 ms
    ├── Set sel_spi0 = 7 (routes PD7 to SCI0 SPI RX/MISO)
@@ -206,7 +220,7 @@ void main(void) {
 
 2. GPIO init
    ├── PD0–PD2: input, pull-up enabled (Hall latches)
-   ├── PD3–PD4: input, pull-down enabled (speed commands)
+   ├── PD3: input, pull-down enabled (low speed command)
    ├── PD4: SPI0_CSOUT output (ASRCSEL=0100b, AOSEL=1)
    ├── PD5: SPI0_SCKOUT output (ASRCSEL=0010b, AOSEL=1)
    ├── PD6: SCI0_Tx output/MOSI (ASRCSEL=0000b, AOSEL=1)
@@ -351,9 +365,9 @@ Iq_demand = CLAMP(Iq_demand, -CONTINUOUS_CURRENT_A, CONTINUOUS_CURRENT_A);
 |---------------------|----------------------|--------|---------------------------------|
 | Vector table        | 0x0800_0000          | 256 B  | ARM interrupt vectors           |
 | Application code    | 0x0800_0100          | ~100 kB| Main firmware                   |
-| ISR code (IRAM copy)| 0x0001_0000          | 8 kB   | Time-critical ISR handlers      |
-| Calibration data    | 0x0803_C000          | 4 kB   | Page 60: angle cal, PID gains   |
-| Fault log           | 0x0803_D000          | 4 kB   | Page 61: fault history          |
+| (IRAM — unused)     | 0x0001_0000          | 8 kB   | Not used — flash prefetch sufficient |
+| Calibration data    | 0x0801_C000          | 4 kB   | Page 28: WiperCalData_t (A89201C 128KB) |
+| Fault log           | 0x0801_D000          | 4 kB   | Page 29: fault history / park log |
 | Reserved (protected)| 0x0803_8000 (page 54)| 4 kB   | Allegro reserved                |
 | Reserved (protected)| 0x0803_F000 (page 63)| 4 kB   | Allegro reserved                |
 
@@ -392,7 +406,7 @@ Recovery from safe state requires a power cycle or explicit external reset (unle
 | Requirement                          | Implementation                              |
 |--------------------------------------|---------------------------------------------|
 | Hardware watchdog                    | SCU WDT, 10 ms timeout, kicked in main loop |
-| Memory integrity                     | SRAM/IRAM/Flash ECC via SCU                |
+| Memory integrity                     | SRAM/Flash ECC via SCU                     |
 | Sensor fault detection               | ABI rate/index plausibility, Hall 000/111 check, Hall vs ABI speed cross-check |
 | Actuator fault detection             | GDU VDS monitoring, CAU stall current       |
 | Safe state on fault                  | ENABLE pin LOW, PWM disabled                |
@@ -420,11 +434,11 @@ Recovery from safe state requires a power cycle or explicit external reset (unle
 #define SPEED_HIGH_RPM      60.0f
 #define SPEED_TOLERANCE_RPM 2.0f
 
-/* Angle targets — loaded from WiperCalData_t in flash page 60 */
+/* Angle targets — loaded from WiperCalData_t in flash page 28 */
 #define ANGLE_TOLERANCE_DEG  1.0f           /* ±1° position accuracy requirement */
 #define OVERRUN_TOLERANCE_DEG 2.0f          /* Extra travel before hard fault */
-/* calData.parkAngleDeg     — park position (flash)     */
-/* calData.reversalAngleDeg — reversal position (flash) */
+/* calData.parkAngleDeg     — park position (flash page 28)   */
+/* calData.reversalAngleDeg — reversal position (flash page 28) */
 
 /* Current limits */
 #define CONTINUOUS_CURRENT_A  6.0f
@@ -462,7 +476,7 @@ Recovery from safe state requires a power cycle or explicit external reset (unle
 ```
 WiperController/
 ├── main.c                  — System init, background loop
-├── startup_A89201.s        — Vector table, stack, IRAM copy
+├── startup_A89201.s        — Vector table, stack init (no IRAM copy)
 ├── A89201_Registers.h      — All peripheral register definitions (manual, no CMSIS pack)
 │
 ├── hal/
@@ -545,7 +559,7 @@ Power-on
 
 ### Configurable Wiper Arc
 
-Arc limits stored in flash page 60 (calibration), set at EOL:
+Arc limits stored in flash page 28 (calibration), set at EOL:
 
 ```c
 typedef struct {
@@ -569,7 +583,7 @@ EOL procedure:
 1. First SPI read → immediate absolute angle (no drive needed)
 2. Drive to mechanical park stop → write `parkAngleDeg` = current SPI angle
 3. Drive to reversal stop → write `reversalAngleDeg`
-4. Write CRC, program flash page 60
+4. Write CRC, program flash page 28
 
 ### Fallback: Hall-Only Mode
 

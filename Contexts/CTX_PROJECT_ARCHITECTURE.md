@@ -13,12 +13,13 @@
 ```
 Vehicle BCM
    │  │
-   │  └── High-Speed CMD ──► IG pin (dedicated HV input, no GPIO)
-   └───── Low-Speed CMD  ──► PD3 (GPIO input, pull-down)
+   │  └── High-Speed CMD ──► 160kΩ/10kΩ divider → Buffer B (×1) ──┐
+   └───── Low-Speed CMD  ──► 75kΩ/10kΩ  divider → Buffer A (×1) ──┤
+                                100kΩ+100kΩ sum → Buffer C (G=4) → PD3
 
                          ┌──────────────── A89201C ────────────────────────┐
-PD3 + IG ────────────►  │ GPIO (PD3) + IG (dedicated HV)                   │
-                         │  └─► Speed Command Decoder                      │
+PD3 (analog) ────────►  │ DAU ADC (PD3, analog mode)                       │
+                         │  └─► Speed Command Decoder (4 voltage levels)   │
 APS12202 ×3 ──────────►  │ PD0/PD1/PD2 → AMCT (Hall subsystem)            │
   (rotor position)       │      └─► Commutation Sector, Speed Estimate     │
                          │                                                  │
@@ -53,7 +54,7 @@ CSP/CSM (2 mΩ shunt) ──► │     └─► Phase current samples         
 The firmware implements a **three-loop cascade controller**:
 
 ```
-Speed Command (PD3=low, IG=high)
+Speed Command (DAU ADC on PD3, 4-level analog)
         │
         ▼
 [1] Position/Angle Controller   (outer loop, 1 kHz)
@@ -76,26 +77,26 @@ All three loops are PI controllers. The position controller additionally has a f
 
 ### 2.2 Speed Targets
 
-| Command State       | PD3 | PD4 | Speed Target | Tolerance |
-|---------------------|-----|-----|--------------|-----------|
-| Park / Stop         | 0   | 0   | 0 RPM        | Park position |
-| Low speed           | 1   | 0   | 40 RPM       | ±2 RPM    |
-| High speed          | 1   | 0   | 60 RPM       | ±2 RPM    |
-| Invalid (fault)     | 1   | 1   | SAFE STATE   | —         |
+Speed command decoded from DAU ADC on PD3 (analog). Two BCM outputs combine via a three-op-amp conditioning circuit (dual per-channel dividers + unity-gain buffers + G=4 summing buffer). IG pin not used for speed command.
 
-Wait — corrected from design specification:
-| Command State       | PD3 | PD4 | Speed Target | Tolerance |
-|---------------------|-----|-----|--------------|-----------|
-| Park / Stop         | 0   | 0   | 0 RPM        | Park position |
-| Low speed           | PD3=1 | IG=0 | 40 RPM    | ±2 RPM    |
-| High speed          | PD3=0 | IG=1 | 60 RPM    | ±2 RPM    |
-| Invalid (fault)     | PD3=1 | IG=1 | SAFE STATE  | —         |
+| Command State  | V_PD3 nominal | ADC code (12-bit, VREF=5V) | Speed target | Tolerance   |
+|----------------|---------------|----------------------------|--------------|-------------|
+| Park / Stop    | 0.00 V        | 0–572                      | 0 RPM (park) | ±1° at park |
+| High speed     | 1.41 V        | 573–1736                   | 60 RPM       | ±2 RPM      |
+| Low speed      | 2.82 V        | 1737–2892                  | 40 RPM       | ±2 RPM      |
+| Invalid (fault)| 4.24 V        | 2893–4095                  | SAFE STATE   | —           |
+
+Decision thresholds: code < 573 = park; 573–1736 = high speed; 1737–2892 = low speed; ≥ 2893 = fault.
+
+BCM low-speed output active → 2.82V (higher code); BCM high-speed active → 1.41V (lower code). Both BCM active simultaneously → fault state ~4.24V.
+
+**VREF assumption: VREF = VIO = 5V.** Verify against DAU documentation before committing resistor values. If VREF < 3.2V rescale dividers (see CTX_MCU_DAU, Section 9).
 
 ### 2.3 Angle Target
 
 - Wiper operates within a configurable mechanical arc — MIN_ANGLE_DEG (park) and MAX_ANGLE_DEG (reversal) stored in flash calibration page and set at EOL
 - At any speed command, the controller regulates speed while maintaining awareness of the end-stop positions
-- At park command (PD3=0 AND IG=0): position controller drives wiper to `calData.parkAngleDeg` (stored in flash calibration page)
+- At park command (DAU ADC code < 573, ~0V at PD3): position controller drives wiper to `calData.parkAngleDeg` (stored in flash calibration page)
 - Position accuracy at park and reversal points: **±1°** (confirmed requirement; end-of-line calibration + optional temperature compensation implemented in firmware)
 
 ### 2.4 Current Limits
@@ -117,7 +118,7 @@ Wait — corrected from design specification:
 | 2        | AMCT Hall event     | Update sector, speed estimate           | < 2 µs       |
 | 3        | PGU period event    | Update PWM duty, run speed/pos PI       | < 10 µs      |
 | 4        | SCU fault           | Log fault, enter safe state             | < 5 µs       |
-| 5        | GPIO (PD3 only)     | Low speed command change, debounce      | < 2 µs       |
+| 5        | GPIO (all PD)       | Not used — PD3 analog, Hall via AMCT, SPI via SCI0 | N/A          |
 | 6        | GTU overflow        | Watchdog tick, background timers        | < 2 µs       |
 | 7        | SCI0 RX complete    | Store A1333 angle result, check EF/UV/parity           | < 2 µs       |
 | 8 (lowest)| LIN / DAU / DMA    | Background diagnostics                  | < 10 µs      |
@@ -159,17 +160,12 @@ void GduMaster_IrqHandler(void) {
     /* 3. Log fault type from GDU STATUS register */
 }
 
-/* GPIO shared ISR (IRQ16 — Gpio_IrqHandler) — single entry for ALL PD0-PD7 */
-void Gpio_IrqHandler(void) {
-    /* Read EVENT_STATUS (0x40008068) to identify which pin(s) fired */
-    uint32_t events = *(volatile uint32_t*)0x40008068U;
-    *(volatile uint32_t*)0x40008068U = events;  /* write-1-to-clear */
-
-    if (events & (1U << 3)) {                   /* PD3: low speed command */
-        SpeedCommand_ProcessChange(eSPEED_LOW, (GPIO_PDIN >> 3) & 1U);
-    }
-    /* PD0-PD2 GPIO interrupts are NOT enabled — AMCT + GTU handle Hall directly */
-}
+/* GPIO ISR (IRQ16 — Gpio_IrqHandler): NOT configured in this project.
+ * PD0–PD2: Hall inputs routed through AMCT hardware (no GPIO IRQ needed).
+ * PD3: analog DAU ADC input — speed command polled at 100 Hz in background.
+ * PD4–PD7: SPI peripheral signals — no GPIO IRQ.
+ * Do NOT enable GPIO interrupts on any pin. This handler should never fire.
+ * If it does fire unexpectedly, log FAULT_GPIO_SPURIOUS and do nothing else. */
 ```
 
 ### 4.2 Background Loop (main(), runs in WFI loops)
@@ -191,6 +187,7 @@ void main(void) {
         if (bg_tick_10Hz) {
             DAU_ReadTemperature();        /* Die temp monitor */
             DAU_ReadSupplyVoltages();     /* VD50 / VD33 sanity check */
+            SpeedCommand_UpdateFromADC(); /* DAU slot 3 (PD3 analog) → decode 4-level voltage → update speed setpoint */
             ABI_ValidatePlausibility();   /* Rate check, index periodicity, Hall speed vs ABI speed cross-check */
             FaultManager_Process();       /* Escalate latched faults */
         }
@@ -220,13 +217,13 @@ void main(void) {
 
 2. GPIO init
    ├── PD0–PD2: input, pull-up enabled (Hall latches)
-   ├── PD3: input, pull-down enabled (low speed command)
+   ├── PD3: analog input, no pull (eGPIO_MODE_ANALOG_INPUT_SOURCE) — speed command, driven by external 3-op-amp circuit
    ├── PD4: SPI0_CSOUT output (ASRCSEL=0100b, AOSEL=1)
    ├── PD5: SPI0_SCKOUT output (ASRCSEL=0010b, AOSEL=1)
    ├── PD6: SCI0_Tx output/MOSI (ASRCSEL=0000b, AOSEL=1)
    ├── PD7: input, no pull (SPI0 MISO, sel_spi0=7)
-   ├── IG: read as digital input (high-speed command, no GPIO config needed)
    └── LIN: not configured (reserved for future use)
+   NOTE: IG pin not used. GPIO interrupts not enabled on any pin.
 
 3. SCI0 init (UART debug only — disabled in production build; clock-gated via SCU)
    SCI1: not configured
@@ -391,7 +388,7 @@ The system enters safe state when any of the following occur:
 | Hall state = 0b000 or 0b111        | ENABLE = 0, latch fault               |
 | SCU WDT timeout                    | Hardware reset                        |
 | SCU ECC multi-bit error            | ENABLE = 0 via fault handler, reset   |
-| PD3 and PD4 both HIGH              | ENABLE = 0, latch fault               |
+| DAU PD3 code ≥ 2893 (both BCM active → ~4.24V) | ENABLE = 0, latch FAULT_SPEED_CMD_INVALID |
 | VD50 undervoltage                  | ENABLE = 0, fault                     |
 | Die temperature ≥ 125°C            | ENABLE = 0, wait for cool-down        |
 
@@ -412,7 +409,7 @@ Recovery from safe state requires a power cycle or explicit external reset (unle
 | Safe state on fault                  | ENABLE pin LOW, PWM disabled                |
 | Single-point fault prevention        | Two independent speed sensors (Hall for speed, A1333 for position) |
 | Stack overflow protection            | MPU configured for stack region             |
-| Invalid input detection              | PD3=PD4=1 treated as fault                 |
+| Invalid input detection              | DAU PD3 code ≥ 2893 treated as fault (both BCM lines active simultaneously) |
 | Calibration data integrity           | CRC32 check at every startup               |
 | Software execution monitoring        | Watchdog + execution flow checkpoints       |
 
@@ -467,6 +464,15 @@ Recovery from safe state requires a power cycle or explicit external reset (unle
 
 /* Watchdog */
 #define WDT_PERIOD_MS         10
+
+/* Speed command ADC decode — DAU slot 3, PD3 analog input, VREF = VIO = 5V assumed */
+/* External circuit: dual BCM dividers (75kΩ/10kΩ low, 160kΩ/10kΩ high) → */
+/*   Buffer A (×1) + Buffer B (×1) → 100kΩ+100kΩ sum → Buffer C (G=4, Rf=30kΩ, Rg=10kΩ) → PD3 */
+/* 40V load dump (Ri=0.5Ω): BufA_in=4.68V, BufB_in=2.35V, both ≤ VIO=5V, BufC output clips gracefully */
+#define SPEED_ADC_PARK_MAX      572U   /* 0–0.70 V  → Park  */
+#define SPEED_ADC_HIGH_MAX      1736U  /* 0.70–1.73 V → High speed (60 RPM) */
+#define SPEED_ADC_LOW_MAX       2892U  /* 1.73–3.54 V → Low speed (40 RPM) */
+                                       /* ≥ 2893     → Invalid / fault  */
 ```
 
 ---
@@ -531,7 +537,8 @@ The following assumptions were made in the absence of explicit design decisions.
 | CAU gain setting | DAG=10 | Verify no saturation at actual stall current with full PCB parasitics |
 | Hall placement offset | Zero (no AMCT phase shift) | Verify mechanically at assembly |
 | PID gains | TBD — must be tuned on hardware | Cannot pre-calculate without motor inertia/back-EMF data |
-| Speed command debounce | 5 ms | Tune based on actual signal quality from vehicle BCM |
+| Speed command VREF | Assumed VIO = 5V | Verify from DAU documentation — if VREF < 3.2V, rescale dividers per CTX_MCU_DAU §9 |
+| Speed command poll rate | 100 Hz (10ms bg tick) | Adequate for human-time-scale BCM changes; increase if BCM transitions faster |
 | Startup angle acquisition | SPI read of register 0x20 after 30 ms tPO — absolute, no homing | **Confirmed** |
 
 ---

@@ -71,11 +71,10 @@ The DAU is used for **non-critical background monitoring** tasks. These run asyn
 | 0    | VTEMP   | Die temperature monitoring                 | 5 µs        |
 | 1    | VBG     | Bandgap reference (ADC self-check)         | 1 µs        |
 | 2    | GND     | Zero offset calibration reference           | 25 µs       |
-| 3    | PD3     | Speed command pin voltage (diagnostic)     | 1 µs        |
-| 4    | PD4     | Speed command pin voltage (diagnostic)     | 1 µs        |
-| 5–15 | Disabled| Reserved for future use                    | —           |
+| 3    | PD3     | Speed command (analog, 3-op-amp circuit)   | 1 µs        |
+| 4–15 | Disabled| Reserved for future use                    | —           |
 
-**Why measure PD3/PD4 with DAU?** The GPIO digital reading gives only HIGH/LOW. DAU gives the actual voltage, which can detect marginal signal levels (e.g., a PD3 sitting at 2.0 V when it should be 0 V or 5 V — indicating a degraded pull-down or a stuck-at condition). This supports ASIL-B diagnostic coverage.
+**PD3 analog mode:** Configured as `eGPIO_MODE_ANALOG_INPUT_SOURCE`. Driven by Buffer C output (G=4 non-inverting op-amp) of the external speed command circuit. Voltage represents a 4-level encoded BCM command (see Section 9). No GPIO interrupt configured on PD3 — polled by DAU at 100 Hz.
 
 ---
 
@@ -91,8 +90,88 @@ Temperature monitoring should flag a warning at 115°C and a fault (safe state) 
 
 ## 8. Project-Specific Notes
 
-- **DAU runs in background** — triggered by software at 10 Hz or slower. Do not run DAU at the same rate as the control loop; this wastes bus bandwidth.
-- **DAU VTEMP channel** gives a reading that represents junction temperature. It is not calibrated to absolute accuracy but is useful for trend monitoring and over-temperature detection. The SCU also has a hardware over-temperature interrupt — the DAU temperature reading is a secondary check.
-- **VBG channel** is a built-in calibration reference. Reading it allows the firmware to verify that the ADC is functioning correctly. If the VBG reading deviates more than ±3% from its nominal value, the DAU is producing unreliable results and should be flagged as a diagnostic fault.
+- **DAU runs in background** — triggered by software at 10 Hz. Do not run DAU at the same rate as the control loop.
+- **DAU VTEMP channel** gives junction temperature. Not calibrated to absolute accuracy but useful for trend monitoring. The SCU also has a hardware over-temperature interrupt — DAU temperature is a secondary check.
+- **VBG channel** is a built-in calibration reference. If VBG reading deviates more than ±3% from nominal, DAU is unreliable — flag FAULT_DAU_UNRELIABLE.
 - **Do not use DAU results in the motor control algorithm** (no latency guarantees). All control-loop inputs come from CAU (current) and SCI0 (angle).
-- DAU results are 12-bit right-aligned in the result register. Conversion formula: V = (result / 4096) × VREF, where VREF = VLR or internal reference (verify from GDU section).
+- DAU results are 12-bit right-aligned in the result register. Conversion formula: V = (result / 4096) × VREF, where VREF = VIO = 5V (assumed — verify).
+
+---
+
+## 9. Speed Command Encoding Circuit (External Hardware)
+
+### 9.1 Architecture
+
+Three-op-amp circuit. All op-amps: AEC-Q100, 5V single supply, rail-to-rail I/O (e.g., LM321, MCP6001T, TLV341).
+
+```
+BCM low speed  (12V, Ri=0.5Ω) → [R_A1=75kΩ] → mid_A → [R_A2=10kΩ to GND]
+                                  → Buffer A (×1) → [R_sumA=100kΩ] ──┐
+                                                                      [node] → Buffer C (G=4) → PD3
+BCM high speed (12V, Ri=0.5Ω) → [R_B1=160kΩ] → mid_B → [R_B2=10kΩ to GND]
+                                  → Buffer B (×1) → [R_sumB=100kΩ] ──┘
+
+Buffer C: non-inverting, G = 1 + Rf/Rg = 4,  Rf = 30 kΩ,  Rg = 10 kΩ
+```
+
+All resistors E24 standard values.
+
+### 9.2 Voltage Levels (nominal 12V BCM, VREF = 5V)
+
+| BCM low | BCM high | V_node | V_PD3 (after G=4) | ADC code | State         |
+|---------|----------|--------|--------------------|----------|---------------|
+| 0V      | 0V       | 0.00V  | 0.00V              | 0        | Park          |
+| 0V      | 12V      | 0.353V | 1.41V              | 1156     | High speed    |
+| 12V     | 0V       | 0.706V | 2.82V              | 2314     | Low speed     |
+| 12V     | 12V      | 1.059V | 4.24V              | 3473     | Invalid/fault |
+
+Decision thresholds in firmware (12-bit codes, VREF=5V):
+
+```c
+#define SPEED_ADC_PARK_MAX      572U   /* < 0.70V  → Park  */
+#define SPEED_ADC_HIGH_MAX      1736U  /* < 2.12V  → High speed (60 RPM) */
+#define SPEED_ADC_LOW_MAX       2892U  /* < 3.54V  → Low speed (40 RPM) */
+                                       /* ≥ 2893   → FAULT_SPEED_CMD_INVALID */
+```
+
+### 9.3 Load Dump Protection (40V, Ri = 0.5Ω)
+
+Divider attenuation limits op-amp input voltages to below VIO at worst-case load dump:
+
+| Point        | Nominal (12V) | Load dump (40V, Ri=0.5Ω) | Limit (VIO) | Status |
+|--------------|---------------|---------------------------|-------------|--------|
+| Buffer A in  | 1.41V         | 4.68V                     | 5.00V       | ✓      |
+| Buffer B in  | 0.71V         | 2.35V                     | 5.00V       | ✓      |
+| Buffer C in  | 0–1.06V       | ≤ 3.52V (both channels)   | 5.00V       | ✓      |
+| PD3 (V_out)  | 0–4.24V       | clips to ~4.9V (VCC-0.1)  | 5.00V       | ✓      |
+
+Ri = 0.5Ω is negligible vs. divider impedance (85kΩ / 170kΩ). The dominant protection is the resistive attenuation ratio of each divider.
+
+During load dump, Buffer C output clips to ~4.9V (op-amp supply rail). ADC reads code ~4010, which exceeds SPEED_ADC_LOW_MAX → firmware enters safe state. No component damage. System returns to normal operation after load dump clears.
+
+### 9.4 Firmware Decode
+
+```c
+typedef enum {
+    eSPEED_CMD_PARK      = 0,
+    eSPEED_CMD_HIGH      = 1,   /* 60 RPM */
+    eSPEED_CMD_LOW       = 2,   /* 40 RPM */
+    eSPEED_CMD_FAULT     = 3,
+} eSpeedCmd_t;
+
+eSpeedCmd_t SpeedCommand_UpdateFromADC(void) {
+    uint16_t code = DAU_RESULT[3];  /* Slot 3 = PD3 */
+
+    if (code <= SPEED_ADC_PARK_MAX)  return eSPEED_CMD_PARK;
+    if (code <= SPEED_ADC_HIGH_MAX)  return eSPEED_CMD_HIGH;
+    if (code <= SPEED_ADC_LOW_MAX)   return eSPEED_CMD_LOW;
+
+    /* Both BCM lines active, or load dump clipping */
+    EnterSafeState(FAULT_SPEED_CMD_INVALID);
+    return eSPEED_CMD_FAULT;
+}
+```
+
+### 9.5 VREF Dependency
+
+All voltage levels and ADC thresholds above assume VREF = VIO = 5V. If the DAU uses an internal reference lower than 3.2V, the 2.82V and 4.24V levels will saturate the ADC. In that case, rescale all four divider resistors to reduce V_PD3_max below VREF, and recalculate thresholds.
